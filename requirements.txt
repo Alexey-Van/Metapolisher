@@ -1,0 +1,8 @@
+pandas
+cyvcf2
+pyfaidx
+gffutils
+pybedtools
+catboost
+scikit-learn
+Bio
