@@ -1,0 +1,10 @@
+python scripts/cat_boost/vcf_feature_catboost.py \
+  --vcfs data/T2T/hifi/output_deepvariant/deepvariant_chr1.filtered.vcf data/T2T/hifi/winnowmap/sniffles/sniffles_hifi_out.vcf data/T2T/illumina/parliament/sv_caller_results/input.cnvnator.vcf  data/T2T/illumina/parliament/sv_caller_results/input.delly.insertion.vcf data/T2T/illumina/parliament/sv_caller_results/input.manta.diploidSV.vcf data/T2T/ont/output_pepper_deepvariant/pepper_deepvariant_chm13_chr1.gq24.vcf data/T2T/ont/sniffles/ont_sniffles.vcf \
+  --truth_vcf  data/T2T/original_fasta/synthetic_truth.vcf \
+  --repeat_gff polisher-zones/final/chm13_chr1_repeatmasker.gff3 \
+  --liftoff_gff polisher-zones/final/liftoff_chr1_annot.gff3 \
+  --low_complex polisher-zones/final/low_complexity_.bed \
+  --flagger polisher-zones/flagger/hmm_flagger_outputs/final_flagger_prediction.bed \
+  --out_vcf ml_filtered.vcf \
+  --threshold 0.9 \
+  --out_table my_table.tsv

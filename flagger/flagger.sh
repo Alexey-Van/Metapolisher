@@ -51,7 +51,7 @@ docker run --rm -it \
   hmm_flagger \
     --input "${PWD}/coverage_file.cov.gz" \
     --outputDir "${PWD}/hmm_flagger_outputs" \
-    --iterations 100 \
+    --iterations 50 \
     --threads 8
 
 echo ">>> Results saved in ${PWD}/hmm_flagger_outputs"
