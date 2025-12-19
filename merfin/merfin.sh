@@ -5,7 +5,7 @@ set -euo pipefail
 # Check arguments
 # ------------------------
 if [ "$#" -lt 3 ]; then
-  echo "Usage: $0 <genome.fa> <meryl_db> <vcf1.vcf> [vcf2.vcf ... vcfN.vcf]"
+  echo "Usage: $0 <genome.fa> <meryl_db> <vcf1.vcf> [vcf2.vcf ... vcfN.vcf]" 
   echo "  genome.fa   - reference FASTA"
   echo "  meryl_db    - k-mer database (created with meryl count)"
   echo "  vcf*.vcf    - one or more VCF files to annotate"

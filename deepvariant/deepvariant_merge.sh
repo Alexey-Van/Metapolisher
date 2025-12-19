@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Check arguments
 if [ "$#" -lt 5 ]; then
-  echo "Usage: $0 <reference.fa> <bam1> <bam2> <output_dir> <threads>"
+  echo "Usage: $0 <reference.fa> <bam1> <bam2> <output_dir> <threads>" 
   exit 1
 fi
 

@@ -13,7 +13,7 @@ fai=$4
 out=$5
 
 if [[ -z $bam || -z $bai || -z $ref || -z $fai || -z $out ]]; then
-  echo "Usage: ./parliament2.sh <input.bam> <input.bam.bai> <ref.fa> <ref.fa.fai> <out_dir>"
+  echo "Usage: ./parliament2.sh <input.bam> <input.bam.bai> <ref.fa> <ref.fa.fai> <out_dir>" 
   exit 1
 fi
 

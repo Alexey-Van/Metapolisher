@@ -2,7 +2,7 @@ from Bio import SeqIO
 import random
 import sys
 import argparse
-from Bio.Seq import Seq
+from Bio.Seq import Seq 
 
 random.seed(42)
 

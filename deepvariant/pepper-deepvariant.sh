@@ -4,10 +4,9 @@ set -euo pipefail
 INPUT_BAM="$1"
 INPUT_FASTA="$2"
 OUTPUT_DIR="$3"
-OUTPUT_PREFIX="chm13_chr1"
+OUTPUT_PREFIX="chm13_chr1" 
 THREADS=4
 
-# Внутренние пути внутри контейнера
 CONTAINER_HOME="/home/pepper_run"
 CONTAINER_BAM="$CONTAINER_HOME/ont_winnowmap.sorted.bam"
 CONTAINER_FASTA="$CONTAINER_HOME/chm13_chr1_mutated.fa"

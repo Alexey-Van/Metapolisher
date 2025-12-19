@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Usage: ./deepvariant.sh <ref.fa> <input.bam> <out_dir> <model_type>
-# Example: ./deepvariant.sh ref.fa sample.bam output_dir WGS
+# Example: ./deepvariant.sh ref.fa sample.bam output_dir WGS 
 
 set -e
 set -o pipefail

@@ -38,7 +38,7 @@ winnowmap --MD -W repetitive_k15.txt -ax $map $opt -t$cpus $ref $reads > ${out}.
 
 # 3. Sorting and converting to BAM
 samtools sort -@$cpus -m2G -T ${out}.tmp -O bam -o ${out}.sort.bam ${out}.sam
-rm ${out}.sam
+rm ${out}.sam 
 
 # 4. BAM indexation
 samtools index ${out}.sort.bam

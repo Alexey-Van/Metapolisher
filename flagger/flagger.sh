@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 3 ]; then
-  echo "Usage: $0 <work_dir> <fasta_file> <bam_file>"
+  echo "Usage: $0 <work_dir> <fasta_file> <bam_file>" 
   exit 1
 fi
 

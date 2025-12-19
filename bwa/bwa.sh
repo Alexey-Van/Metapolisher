@@ -2,7 +2,7 @@
 
 # Usage: ./bwa.sh <ref.fasta> <fastq_map> <out_prefix> [idx]
 # fastq_map: prefix fastq 
-
+ 
 set -o pipefail
 set -e
 

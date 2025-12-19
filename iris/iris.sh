@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$#" -lt 6 ]; then
-  echo "Usage: $0 <input_dir> <output_dir> <genome.fa> <reads.bam> <vcf_in> <parliament_output>"
+  echo "Usage: $0 <input_dir> <output_dir> <genome.fa> <reads.bam> <vcf_in> <parliament_output>" 
   exit 1
 fi
 

@@ -4,7 +4,7 @@ python scripts/cat_boost/vcf_feature_catboost.py \
   --repeat_gff polisher-zones/final/chm13_chr1_repeatmasker.gff3 \
   --liftoff_gff polisher-zones/final/liftoff_chr1_annot.gff3 \
   --low_complex polisher-zones/final/low_complexity_.bed \
-  --flagger polisher-zones/flagger/hmm_flagger_outputs/final_flagger_prediction.bed \
-  --out_vcf ml_filtered.vcf \
+  --flagger polisher-zones/flagger/hmm_flagger_outputs/final_flagger_prediction.bed \ 
+  --out_vcf ml_filtered_7_trheshold_5_depth_10.vcf.vcf \
   --threshold 0.9 \
-  --out_table my_table.tsv
+  --out_table variant_features.tsv

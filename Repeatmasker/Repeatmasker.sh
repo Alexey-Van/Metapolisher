@@ -6,7 +6,7 @@ set -euo pipefail
 # ------------------------
 if [ "$#" -lt 2 ]; then
   echo "Usage: $0 <repeatmasker_path> <genome.fa>"
-  echo "  repeatmasker_path - directory where RepeatMasker is installed"
+  echo "  repeatmasker_path - directory where RepeatMasker is installed" 
   echo "  genome.fa         - input FASTA file"
   exit 1
 fi

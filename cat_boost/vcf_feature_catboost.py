@@ -264,7 +264,7 @@ def main(args):
     print("Done")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": 
     p = argparse.ArgumentParser()
     p.add_argument("--vcfs", nargs="+", required=True)
     p.add_argument("--truth_vcf", required=True)
