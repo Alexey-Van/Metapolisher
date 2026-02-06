@@ -302,6 +302,10 @@ def main(args):
         eval_set=(X_test, y_test)
     )
 
+    model.save_model("model.json", format="json")
+
+    print(model.get_feature_importance(prettified=True)[:20])
+
     print("AUC:", roc_auc_score(y_test, model.predict_proba(X_test)[:, 1]))
 
     print("[6] Writing filtered VCF")
