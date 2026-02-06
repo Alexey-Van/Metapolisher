@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-Variant ensemble ML pipeline with TRUE ground truth (SV-aware).
+Variant ensemble ML pipeline with TRUE ground truth (SV-aware)
 
 - Merge multiple VCFs into a single variant table
 - Annotate with GFF3 / BED (RepeatMasker, Liftoff, low complexity, Flagger)
-- Build TRUE_VARIANT label from truth VCF (±1bp tolerance)
-- Train CatBoostClassifier (binary classification)
-- Output filtered VCF with ML probability
+- Build TRUE_VARIANT label from truth VCF (±1bp)
+- Split by SVTYPE (SNV / INDEL)
+- Train CatBoost models independently
+- Save models
+- Write SNV / INDEL / ALL filtered VCFs
 """
 
 import argparse
@@ -19,6 +21,7 @@ from catboost import CatBoostClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
 
+
 # ------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------
@@ -29,102 +32,120 @@ def safe_float(x):
     except Exception:
         return 0.0
 
-def safe_int(x):
-    try:
-        return int(x)
-    except Exception:
-        return 0
 
 def normalize_info_value(key, value):
     if value is None:
         return 0
-    if key.upper() == "COVERAGE":
-        if isinstance(value, (list, tuple)) and value:
-            return float(sum(value)) / len(value)
-        return safe_float(value)
     if key.upper() == "SVLEN":
         if isinstance(value, (list, tuple)):
             return abs(safe_float(value[0]))
         return abs(safe_float(value))
     if isinstance(value, (list, tuple)):
         try:
-            return float(sum(value)) / len(value)
+            return float(np.mean(value))
         except Exception:
             return 0
-    return safe_float(value) if isinstance(value, (int, float)) else value
+    return safe_float(value)
+
+
+def normalize_svtype(x):
+    if x in ("SNV", "SNP"):
+        return "SNV"
+    return "INDEL"
+
+
+# ------------------------------------------------------------
+# CatBoost
+# ------------------------------------------------------------
+
+def train_catboost(df, label="TRUE_VARIANT"):
+    drop_cols = {
+        label, "CHROM", "POS", "END",
+        "REF", "ALT", "SVTYPE", "SVTYPE_NORM"
+    }
+
+    X = df.drop(columns=[c for c in drop_cols if c in df.columns])
+    y = df[label]
+
+    if y.nunique() < 2:
+        raise RuntimeError("Only one class present — training impossible")
+
+    cat_cols = X.select_dtypes(include="object").columns.tolist()
+
+    X_tr, X_te, y_tr, y_te = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42
+    )
+
+    model = CatBoostClassifier(
+        iterations=500,
+        depth=12,
+        learning_rate=0.05,
+        loss_function="Logloss",
+        eval_metric="AUC",
+        auto_class_weights="Balanced",
+        verbose=100,
+    )
+
+    model.fit(X_tr, y_tr, cat_features=cat_cols, eval_set=(X_te, y_te))
+    auc = roc_auc_score(y_te, model.predict_proba(X_te)[:, 1])
+    print(f"AUC = {auc:.4f}")
+
+    return model
+
+
+def predict_block(df, model):
+    drop_cols = {
+        "TRUE_VARIANT", "CHROM", "POS", "END",
+        "REF", "ALT", "SVTYPE", "SVTYPE_NORM"
+    }
+    X = df.drop(columns=[c for c in drop_cols if c in df.columns])
+    return model.predict_proba(X)[:, 1]
+
 
 # ------------------------------------------------------------
 # FORMAT parsing
 # ------------------------------------------------------------
 
 def parse_format_fields(v, prefix):
-    out = {}
-
-    out[f"{prefix}_QUAL"] = float(v.QUAL) if v.QUAL is not None else 0.0
+    out = {f"{prefix}_QUAL": safe_float(v.QUAL)}
 
     if not v.FORMAT or not v.genotypes:
         return out
-
-    sample_idx = 0 
 
     for fmt in v.FORMAT:
         try:
             arr = v.format(fmt)
         except KeyError:
             continue
-
         if arr is None or len(arr) == 0:
             continue
 
-        val = arr[sample_idx]
+        val = arr[0]
+        key = f"{prefix}_FORMAT_{fmt}"
 
-        # ---------- GT ----------
-        if fmt == "GT":
-            if isinstance(val, (list, np.ndarray)) and len(val) >= 2:
-                out[f"{prefix}_GT"] = int(val[0] != val[1])
-            else:
-                out[f"{prefix}_GT"] = 0
-            continue
-
-        # ---------- scalar numeric ----------
-        if isinstance(val, (int, float, np.integer, np.floating)):
-            out[f"{prefix}_FORMAT_{fmt}"] = float(val)
-            continue
-
-        # ---------- numeric array (AD, PL) ----------
-        if isinstance(val, (list, np.ndarray)):
-            nums = [x for x in val if isinstance(x, (int, float, np.integer, np.floating))]
-            out[f"{prefix}_FORMAT_{fmt}"] = float(np.mean(nums)) if nums else 0.0
-            continue
-
-        # ---------- categorical string (FT=PASS etc.) ----------
-        if isinstance(val, (str, np.str_)):
-            out[f"{prefix}_FORMAT_{fmt}"] = str(val)
-            continue
-
-        # ---------- fallback ----------
-        out[f"{prefix}_FORMAT_{fmt}"] = "NA"
+        if fmt == "GT" and isinstance(val, (list, np.ndarray)):
+            out[f"{prefix}_GT"] = int(val[0] != val[1])
+        elif isinstance(val, (int, float, np.integer, np.floating)):
+            out[key] = float(val)
+        elif isinstance(val, (list, np.ndarray)):
+            nums = [x for x in val if isinstance(x, (int, float))]
+            out[key] = float(np.mean(nums)) if nums else 0.0
+        else:
+            out[key] = str(val)
 
     return out
-
-
 
 
 # ------------------------------------------------------------
 # VCF loading
 # ------------------------------------------------------------
 
-def load_vcf_as_df(vcf_path, prefix):
-    records = []
-    vcf = VCF(str(vcf_path))
-    is_deepvariant = "deepvariant" in prefix.lower()
+def load_vcf_as_df(path):
+    prefix = Path(path).stem
+    rows = []
 
-    for v in vcf:
+    for v in VCF(path):
         info = dict(v.INFO)
-        
-        pos = v.POS - 1 if is_deepvariant else v.POS
-        end = v.end - 1 if (is_deepvariant and v.end) else v.end
-        end = max(end, pos)
 
         row = {
             "CHROM": v.CHROM,
@@ -133,38 +154,67 @@ def load_vcf_as_df(vcf_path, prefix):
             "REF": v.REF,
             "ALT": str(v.ALT[0]) if v.ALT else None,
             "SVTYPE": info.get("SVTYPE", "SNV"),
-            "SVLEN": normalize_info_value("SVLEN", info.get("SVLEN", 0)),
+            "SVLEN": normalize_info_value("SVLEN", info.get("SVLEN")),
             f"{prefix}_present": 1,
-            f"{prefix}_QUAL": safe_float(v.QUAL),
         }
 
-        # INFO
         for k, val in info.items():
             row[f"{prefix}_INFO_{k}"] = normalize_info_value(k, val)
 
-        # FORMAT
         row.update(parse_format_fields(v, prefix))
+        rows.append(row)
 
-        records.append(row)
+    return pd.DataFrame(rows)
 
-    return pd.DataFrame(records)
 
-def outer_merge_vcfs(vcf_paths):
-    dfs = []
-    for p in vcf_paths:
-        name = Path(p).stem
-        dfs.append(load_vcf_as_df(p, name))
-
+def outer_merge_vcfs(paths):
+    dfs = [load_vcf_as_df(p) for p in paths]
     df = dfs[0]
-    for other in dfs[1:]:
+    for d in dfs[1:]:
         df = df.merge(
-            other,
+            d,
             on=["CHROM", "POS", "END", "REF", "ALT", "SVTYPE", "SVLEN"],
             how="outer",
         )
+    return df.fillna(0)
 
-    df.fillna(0, inplace=True)
-    return df
+def collect_contigs(vcfs):
+    contigs = set()
+    for path in vcfs:
+        for v in VCF(path):
+            contigs.add(v.CHROM)
+    return sorted(contigs)
+
+import pysam
+
+def fixed_header(template_vcf, all_vcfs):
+    vf = pysam.VariantFile(template_vcf)
+    header = vf.header.copy()
+
+    # --- contigs ---
+    contigs = set()
+    for vcf in all_vcfs:
+        for rec in pysam.VariantFile(vcf).fetch():
+            contigs.add(rec.chrom)
+
+    for c in sorted(contigs):
+        if c not in header.contigs:
+            header.contigs.add(c)
+
+    # --- INFO ---
+    if "ML_PROB" not in header.info:
+        header.info.add(
+            "ML_PROB",
+            number=1,
+            type="Float",
+            description="CatBoost predicted probability"
+        )
+
+    return header
+
+
+
+
 
 # ------------------------------------------------------------
 # Annotation loaders
@@ -176,15 +226,20 @@ def load_bed(path, value_col=None):
         for line in f:
             if line.startswith("#") or not line.strip():
                 continue
-            parts = line.strip().split("\t")
+
+            parts = line.rstrip().split("\t")
             if len(parts) < 3:
-                continue
+                if len(parts) < 3:
+                    continue
+
             chrom, start, end = parts[0], int(parts[1]), int(parts[2])
             val = parts[value_col] if value_col is not None and len(parts) > value_col else 1
             trees.setdefault(chrom, IntervalTree()).addi(start, end, val)
     return trees
 
-def load_gff3(path, attr_key=None, col_idx=None):
+
+
+def load_gff3(path, attr_key=None):
     trees = {}
     with open(path) as f:
         for line in f:
@@ -201,7 +256,6 @@ def load_gff3(path, attr_key=None, col_idx=None):
                 end += 1
 
             value = parts[2]
-
             if attr_key:
                 attrs = dict(
                     x.split("=", 1) for x in parts[8].split(";") if "=" in x
@@ -213,13 +267,13 @@ def load_gff3(path, attr_key=None, col_idx=None):
 
     return trees
 
+
 # ------------------------------------------------------------
 # Annotation application
 # ------------------------------------------------------------
 
 def annotate_interval(df, trees, colname):
-    present = []
-    value = []
+    present, value = [], []
 
     for _, r in df.iterrows():
         hits = trees.get(r.CHROM, IntervalTree()).overlap(r.POS, r.END + 1)
@@ -236,20 +290,57 @@ def annotate_interval(df, trees, colname):
 
 
 # ------------------------------------------------------------
-# Truth VCF matching (±1bp)
+# Truth
 # ------------------------------------------------------------
 
-def load_truth_variants(truth_vcf):
+def load_truth(vcf):
     truth = {}
-    for v in VCF(truth_vcf):
+    for v in VCF(vcf):
         truth.setdefault(v.CHROM, set()).add(v.POS)
     return truth
 
-def is_true_variant(r, truth_dict):
-    for tpos in truth_dict.get(r.CHROM, []):
-        if abs(r.POS - tpos) <= 1:
-            return 1
-    return 0
+
+def is_true(r, truth):
+    return int(any(abs(r.POS - p) <= 1 for p in truth.get(r.CHROM, [])))
+
+
+# ------------------------------------------------------------
+# VCF writing
+# ------------------------------------------------------------
+
+def write_vcf(df, vcfs, out_vcf, threshold):
+    header = fixed_header(vcfs[0], vcfs)
+    out = pysam.VariantFile(out_vcf, "w", header=header)
+
+    keep = {
+        (r.CHROM, r.POS, r.REF, r.ALT): r.ML_PROB
+        for _, r in df.iterrows()
+        if r.ML_PROB >= threshold
+    }
+
+    written = 0
+
+    for vcf in vcfs:
+        vf = pysam.VariantFile(vcf)
+        for v in vf.fetch():
+            key = (v.chrom, v.pos, v.ref, v.alts[0] if v.alts else None)
+            if key not in keep:
+                continue
+
+            nv = out.new_record(
+                contig=v.chrom,
+                start=v.start,
+                stop=v.stop,
+                alleles=v.alleles
+            )
+            nv.info["ML_PROB"] = float(keep[key])
+            out.write(nv)
+            written += 1
+
+    out.close()
+    print(f"[VCF] written {written} variants → {out_vcf}")
+
+
 
 # ------------------------------------------------------------
 # Main
@@ -258,7 +349,6 @@ def is_true_variant(r, truth_dict):
 def main(args):
     print("[1] Loading and merging VCFs")
     df = outer_merge_vcfs(args.vcfs)
-    print(f"Merged variants: {len(df):,}")
 
     print("[2] Loading annotations")
     repeat = load_gff3(args.repeat_gff, attr_key="Target")
@@ -273,68 +363,40 @@ def main(args):
     annotate_interval(df, flagger, "flagger_state")
 
     print("[4] Building TRUE_VARIANT labels")
-    truth = load_truth_variants(args.truth_vcf)
-    df["TRUE_VARIANT"] = df.apply(lambda r: is_true_variant(r, truth), axis=1)
+    df["SVTYPE_NORM"] = df["SVTYPE"].apply(normalize_svtype)
+    truth = load_truth(args.truth_vcf)
+    df["TRUE_VARIANT"] = df.apply(lambda r: is_true(r, truth), axis=1)
+
+    print("[5] Splitting SNV / INDEL")
+    df_snv = df[df.SVTYPE_NORM == "SNV"].copy()
+    df_indel = df[df.SVTYPE_NORM == "INDEL"].copy()
+
+    print(f"SNV   : {len(df_snv):,}")
+    print(f"INDEL : {len(df_indel):,}")
+
+    print("[6] Training models")
+    model_snv = train_catboost(df_snv)
+    model_snv.save_model("catboost_snv.cbm")
+
+    model_indel = train_catboost(df_indel)
+    model_indel.save_model("catboost_indel.cbm")
+
+    print("[7] Predicting ML_PROB")
+    df["ML_PROB"] = 0.0
+    df.loc[df_snv.index, "ML_PROB"] = predict_block(df_snv, model_snv)
+    df.loc[df_indel.index, "ML_PROB"] = predict_block(df_indel, model_indel)
+
+    df_snv["ML_PROB"] = df.loc[df_snv.index, "ML_PROB"]
+    df_indel["ML_PROB"] = df.loc[df_indel.index, "ML_PROB"]
 
     df.to_csv(args.out_table, sep="\t", index=False)
 
-    print("[5] Training CatBoost")
-    y = df.TRUE_VARIANT
-    X = df.drop(columns=["TRUE_VARIANT"])
-    cat_cols = X.select_dtypes(include="object").columns.tolist()
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, stratify=y, test_size=0.8, random_state=42
-    )
+    print("[8] Writing VCFs")
+    write_vcf(df_snv, args.vcfs, "snv.filtered.vcf", args.threshold)
+    write_vcf(df_indel, args.vcfs, "indel.filtered.vcf", args.threshold)
+    write_vcf(df, args.vcfs, args.out_vcf, args.threshold)
 
-    model = CatBoostClassifier(
-        iterations=500,
-        depth=10,
-        learning_rate=0.05,
-        loss_function="Logloss",
-        eval_metric="AUC",
-        verbose=100
-    )
-
-    model.fit(
-        X_train, y_train,
-        cat_features=cat_cols,
-        eval_set=(X_test, y_test)
-    )
-
-    model.save_model("model.json", format="json")
-
-    print(model.get_feature_importance(prettified=True)[:20])
-
-    print("AUC:", roc_auc_score(y_test, model.predict_proba(X_test)[:, 1]))
-
-    print("[6] Writing filtered VCF")
-    base_vcf = VCF(args.vcfs[0])
-    base_vcf.add_info_to_header({
-        "ID": "ML_PROB",
-        "Type": "Float",
-        "Number": "1",
-        "Description": "CatBoost TRUE_VARIANT probability",
-    })
-
-    writer = Writer(args.out_vcf, base_vcf)
-    df["ML_PROB"] = model.predict_proba(X)[:, 1]
-
-    prob_map = {
-        (r.CHROM, r.POS, r.END, r.REF, r.ALT): r.ML_PROB
-        for _, r in df.iterrows()
-    }
-
-    for v in base_vcf:
-        key = (v.CHROM, v.POS, max(v.end, v.POS), v.REF, str(v.ALT[0]) if v.ALT else None)
-        if key in prob_map and prob_map[key] >= args.threshold:
-            v.INFO["ML_PROB"] = round(prob_map[key], 4)
-            writer.write_record(v)
-
-    writer.close()
-    print("Done")
-
-# ------------------------------------------------------------
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
