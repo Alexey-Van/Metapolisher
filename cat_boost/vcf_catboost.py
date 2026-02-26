@@ -73,22 +73,32 @@ def train_catboost(df, label="TRUE_VARIANT"):
     cat_cols = X.select_dtypes(include="object").columns.tolist()
 
     X_tr, X_te, y_tr, y_te = train_test_split(
-        X, y, test_size=0.2, stratify=y, random_state=42
+        X, y, test_size=0.8, stratify=y, random_state=42
     )
 
     model = CatBoostClassifier(
-        iterations=500,
-        depth=12,
+        iterations=300,
+        depth=4,
         learning_rate=0.05,
-        loss_function="Logloss",
-        eval_metric="AUC",
+        loss_function="Logloss", 
         auto_class_weights="Balanced",
+        l2_leaf_reg=5,
+        eval_metric="AUC",
         verbose=100,
-    )
+    )   
+
 
     model.fit(X_tr, y_tr, cat_features=cat_cols, eval_set=(X_te, y_te))
+
+    # после model.fit(...)
+    print("\n=== Feature Importance (PredictionValuesChange) ===")
+    fi = model.get_feature_importance(type="PredictionValuesChange")
+    for name, val in sorted(zip(X.columns, fi), key=lambda x: -x[1])[:30]:
+        print(f"{name:40s} {val:.5f}")
+
     auc = roc_auc_score(y_te, model.predict_proba(X_te)[:, 1])
     print(f"AUC = {auc:.4f}")
+    
 
     return model
 
@@ -165,6 +175,62 @@ def load_vcf_as_df(path):
         rows.append(row)
 
     return pd.DataFrame(rows)
+
+def load_merfin_support(merfin_vcf):
+    """
+    Загружает Merfin PASS VCF и возвращает множество поддержанных позиций.
+    Ключ: (CHROM, POS)
+    """
+    supported = set()
+    for v in VCF(merfin_vcf):
+        supported.add((v.CHROM, v.POS))
+    return supported
+
+
+def annotate_merfin_support(df, merfin_vcf):
+    """
+    Добавляет колонку MERFIN_SUPPORTED в общий DataFrame.
+    """
+    supported = load_merfin_support(merfin_vcf)
+
+    df["MERFIN_SUPPORTED"] = df.apply(
+        lambda r: int((r.CHROM, r.POS) in supported),
+        axis=1
+    )
+    return df
+
+def load_merfin_scores(bed_path):
+    """
+    Загружает Merfin kmer_scores.bed в IntervalTree по хромосомам.
+    """
+    trees = {}
+    with open(bed_path) as f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            chrom, start, end, score = line.rstrip().split("\t")
+            start, end = int(start), int(end)
+            score = float(score)
+            trees.setdefault(chrom, IntervalTree()).addi(start, end, score)
+    return trees
+
+
+def annotate_merfin_scores(df, bed_path):
+    """
+    Добавляет колонку MERFIN_SCORE (или 0.0, если нет попадания).
+    """
+    trees = load_merfin_scores(bed_path)
+    scores = []
+
+    for _, r in df.iterrows():
+        hits = trees.get(r.CHROM, IntervalTree()).overlap(r.POS, r.END)
+        if hits:
+            scores.append(next(iter(hits)).data)
+        else:
+            scores.append(0.0)
+
+    df["MERFIN_SCORE"] = scores
+    return df
 
 
 def outer_merge_vcfs(paths):
@@ -309,23 +375,70 @@ def is_true(r, truth):
 # ------------------------------------------------------------
 
 def write_vcf(df, vcfs, out_vcf, threshold):
+    """
+    - keep only variants with ML_PROB >= threshold
+    - if multiple rows share same (CHROM, POS): keep max ML_PROB
+    - INFO:
+        ML_PROB
+        SOURCE=tool1,tool2,...
+    """
+
+    # ----------------------------
+    # 1. filter by threshold
+    # ----------------------------
+    df_filt = df[df.ML_PROB >= threshold].copy()
+    if df_filt.empty:
+        print(f"[VCF] no variants pass threshold for {out_vcf}")
+        return
+
+    # ----------------------------
+    # 2. deduplicate by CHROM, POS
+    # ----------------------------
+    df_filt.sort_values("ML_PROB", ascending=False, inplace=True)
+    df_best = df_filt.drop_duplicates(subset=["CHROM", "POS"], keep="first")
+
+    # ----------------------------
+    # 3. prepare header
+    # ----------------------------
     header = fixed_header(vcfs[0], vcfs)
+
+    if "SOURCE" not in header.info:
+        header.info.add(
+            "SOURCE",
+            number=".",
+            type="String",
+            description="Source tools contributing to this variant"
+        )
+
     out = pysam.VariantFile(out_vcf, "w", header=header)
 
-    keep = {
-        (r.CHROM, r.POS, r.REF, r.ALT): r.ML_PROB
-        for _, r in df.iterrows()
-        if r.ML_PROB >= threshold
-    }
+    # ----------------------------
+    # 4. index variants by key
+    # ----------------------------
+    best = {}
+    for _, r in df_best.iterrows():
+        key = (r.CHROM, r.POS)
+        best[key] = r
 
+    # ----------------------------
+    # 5. write records
+    # ----------------------------
     written = 0
 
     for vcf in vcfs:
         vf = pysam.VariantFile(vcf)
         for v in vf.fetch():
-            key = (v.chrom, v.pos, v.ref, v.alts[0] if v.alts else None)
-            if key not in keep:
+            key = (v.chrom, v.pos)
+            if key not in best:
                 continue
+
+            r = best[key]
+
+            # ---- collect sources ----
+            sources = []
+            for c in df.columns:
+                if c.endswith("_present") and r.get(c, 0) == 1:
+                    sources.append(c.replace("_present", ""))
 
             nv = out.new_record(
                 contig=v.chrom,
@@ -333,12 +446,17 @@ def write_vcf(df, vcfs, out_vcf, threshold):
                 stop=v.stop,
                 alleles=v.alleles
             )
-            nv.info["ML_PROB"] = float(keep[key])
+
+            nv.info["ML_PROB"] = float(r.ML_PROB)
+            if sources:
+                nv.info["SOURCE"] = ",".join(sorted(sources))
+
             out.write(nv)
             written += 1
 
     out.close()
     print(f"[VCF] written {written} variants → {out_vcf}")
+
 
 
 
@@ -349,6 +467,9 @@ def write_vcf(df, vcfs, out_vcf, threshold):
 def main(args):
     print("[1] Loading and merging VCFs")
     df = outer_merge_vcfs(args.vcfs)
+    df = annotate_merfin_support(df, "merfin.pass.vcf")
+    df = annotate_merfin_scores(df, "kmer_scores.bed")
+
 
     print("[2] Loading annotations")
     repeat = load_gff3(args.repeat_gff, attr_key="Target")
@@ -402,6 +523,8 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--vcfs", nargs="+", required=True)
     p.add_argument("--truth_vcf", required=True)
+    p.add_argument("--merfin_pass_vcf", required=True)
+    p.add_argument("--merfin_scores_bed", required=False)
     p.add_argument("--repeat_gff", required=True)
     p.add_argument("--liftoff_gff", required=True)
     p.add_argument("--low_complex", required=True)

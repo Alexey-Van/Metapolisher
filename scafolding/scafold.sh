@@ -1,40 +1,47 @@
 #!/bin/bash
 
+bwa index data/T2T/original_fasta/flye/flye.contigs.fasta
+
+bwa mem -5SP -t 12 data/T2T/original_fasta/flye/flye.contigs.fasta CHM13.rep1_lane1_R1.fastq.gz CHM13.rep1_lane1_R2.fastq.gz |     samtools view -b -F 2316 | samtools sort -o flye_hic.sorted.bam  
+
+samtools index flye_hic.sorted.bam; yahs data/T2T/original_fasta/flye/flye.contigs.fasta flye_hic.sorted.bam
+
+
 # Использование:
 #   ./run_yahs.sh contigs.fa hic_R1.fastq.gz hic_R2.fastq.gz prefix
 
-# if [ $# -lt 4 ]; then
-#     echo "Использование: $0 <contigs.fa> <hic_R1.fastq.gz> <hic_R2.fastq.gz> <prefix>"
-#     exit 1
-# fi
+if [ $# -lt 4 ]; then
+    echo "Использование: $0 <contigs.fa> <hic_R1.fastq.gz> <hic_R2.fastq.gz> <prefix>"
+    exit 1
+fi
 
-# CONTIGS=$1
-# HIC_R1=$2
-# HIC_R2=$3
-# PREFIX=$4
+CONTIGS=$1
+HIC_R1=$2
+HIC_R2=$3
+PREFIX=$4
 
-# echo "FASTA контигов (референс для Hi-C): $CONTIGS"
-# echo "Hi-C R1: $HIC_R1"
-# echo "Hi-C R2: $HIC_R2"
-# echo "Префикс: $PREFIX"
+echo "FASTA контигов (референс для Hi-C): $CONTIGS"
+echo "Hi-C R1: $HIC_R1"
+echo "Hi-C R2: $HIC_R2"
+echo "Префикс: $PREFIX"
 
-# # 1. Индексация FASTA
-# echo "[1] samtools faidx..."
-# samtools faidx "$CONTIGS"
+# 1. Индексация FASTA
+echo "[1] samtools faidx..."
+samtools faidx "$CONTIGS"
 
-# # 2. Индекс для minimap2
-# echo "[2] minimap2 index..."
-# minimap2 -d "${CONTIGS}.mmi" "$CONTIGS"
+# 2. Индекс для minimap2
+echo "[2] minimap2 index..."
+minimap2 -d "${CONTIGS}.mmi" "$CONTIGS"
 
-# # 3. Выравнивание Hi-C ридов на контиги и создание BAM
-# echo "[3] Выравнивание Hi-C на контиги (minimap2)..."
-# minimap2 -t 16 -ax sr "${CONTIGS}.mmi" "$HIC_R1" "$HIC_R2" | \
-#     samtools view -b -o "${PREFIX}.hic.raw.bam" -
+# 3. Выравнивание Hi-C ридов на контиги и создание BAM
+echo "[3] Выравнивание Hi-C на контиги (minimap2)..."
+minimap2 -t 16 -ax sr "${CONTIGS}.mmi" "$HIC_R1" "$HIC_R2" | \
+    samtools view -b -o "${PREFIX}.hic.raw.bam" -
 
-# # 4. Сортировка BAM по координатам (для удобства)
-# echo "[4] Сортировка BAM по координатам..."
-# samtools sort -o "${PREFIX}.hic.sorted.bam" "${PREFIX}.hic.raw.bam"
-# samtools index "${PREFIX}.hic.sorted.bam"
+# 4. Сортировка BAM по координатам (для удобства)
+echo "[4] Сортировка BAM по координатам..."
+samtools sort -o "${PREFIX}.hic.sorted.bam" "${PREFIX}.hic.raw.bam"
+samtools index "${PREFIX}.hic.sorted.bam"
 
 # 5. Сортировка по имени для YaHS
 echo "[5] Сортировка BAM по имени..."
