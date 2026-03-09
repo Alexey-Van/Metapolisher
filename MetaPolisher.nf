@@ -270,3 +270,4 @@ workflow {
 
     all_vcf = Channel.merge(parliament_vcf, deepvariant_illumina_vcf, deepvariant_hifi_vcf, pepper_vcf, jasmine_vcf)
     vcf_for_merfin = all_vcf.filter { vcf -> vcf.name != file(params.truth_vcf).name }
+}
