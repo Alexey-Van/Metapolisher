@@ -12,6 +12,7 @@ Variant ensemble ML pipeline with TRUE ground truth (SV-aware)
 """
 
 import argparse
+import pysam
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -250,8 +251,6 @@ def collect_contigs(vcfs):
         for v in VCF(path):
             contigs.add(v.CHROM)
     return sorted(contigs)
-
-import pysam
 
 def fixed_header(template_vcf, all_vcfs):
     vf = pysam.VariantFile(template_vcf)

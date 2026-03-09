@@ -1,0 +1,52 @@
+#!/bin/bash
+set -euo pipefail
+
+if [ "$#" -lt 3 ]; then
+  echo "Usage: $0 <work_dir> <fasta_file> <bam_file>" 
+  exit 1
+fi
+
+WORK_DIR="$1"
+FASTA_FILE="$2"
+BAM_FILE="$3"
+
+cd "${WORK_DIR}"
+
+# 1. Create FASTA index if missing
+if [ ! -f "${FASTA_FILE}.fai" ]; then
+  samtools faidx "${FASTA_FILE}"
+fi
+
+# 2. Create BAM index if missing
+if [ ! -f "${BAM_FILE}.bai" ]; then
+  samtools index "${BAM_FILE}"
+fi
+
+# 3. Whole-genome BED
+awk '{print $1"\t0\t"$2}' "${FASTA_FILE}.fai" > whole_genome.bed
+
+# 4. JSON for annotations
+cat > annotations_path.json <<EOF
+{
+  "whole_genome" : "$(pwd)/whole_genome.bed"
+}
+EOF
+
+# 5. BAM → COV.GZ
+bam2cov \
+  --bam "${BAM_FILE}" \
+  --output coverage_file.cov.gz \
+  --annotationJson annotations_path.json \
+  --threads 16 \
+  --baselineAnnotation whole_genome
+
+# 6. Run hmm_flagger
+mkdir -p hmm_flagger_outputs
+
+hmm_flagger \
+  --input coverage_file.cov.gz \
+  --outputDir hmm_flagger_outputs \
+  --iterations 50 \
+  --threads 8
+
+echo ">>> Results saved in hmm_flagger_outputs"
