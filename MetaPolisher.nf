@@ -11,18 +11,13 @@ params.reads_table   = "${baseDir}/data/reads.tsv"
 params.outdir        = "${baseDir}/results"
 
 // ----------------------
-// GLOBAL CONTAINER
-// ----------------------
-
-process.container = 'metapolisher-tools:latest'
-
-// ----------------------
 // INPUT CHANNELS
 // ----------------------
 
 Channel.fromPath(params.assembly).set { assembly_ch }
 Channel.fromPath(params.truth_vcf).set { truth_vcf_ch }
 Channel.fromPath(params.annotation).set { annotation_ch }
+Channel.fromPath("${baseDir}/Dockerfile").set { dockerfile_ch }
 
 Channel
     .fromPath(params.reads_table)
@@ -31,10 +26,40 @@ Channel
     .set { reads_ch }
 
 // ----------------------
+// BUILD ENVIRONMENT
+// ----------------------
+
+process BUILD_ENV {
+    container 'docker:latest'
+    publishDir "${params.outdir}/env", mode: 'copy'
+    tag "docker-build"
+
+    input:
+        path dockerfile from dockerfile_ch
+
+    output:
+        path "docker_build.log"
+
+    script:
+        """
+        echo ">>> Building metapolisher-tools:latest..."
+        docker build -t metapolisher-tools:latest -f ${dockerfile} .
+
+        echo ">>> Pulling external images..."
+        docker pull google/deepvariant:1.9.0
+        docker pull kishwars/pepper_deepvariant:r0.8
+        docker pull mobinasri/flagger:latest
+
+        echo ">>> Done" > docker_build.log
+        """
+}
+
+// ----------------------
 // ALIGNMENT
 // ----------------------
 
 process ALIGN {
+    container 'metapolisher-tools:latest'
     publishDir "${params.outdir}/alignments", mode: 'copy'
     tag "${reads.simpleName} (${flag})"
 
@@ -47,7 +72,7 @@ process ALIGN {
 
     script:
         """
-        align.sh ${flag} ${assembly} ${reads}
+        bash /scripts/align.sh ${flag} ${assembly} ${reads}
         """
 }
 
@@ -65,31 +90,9 @@ clr_bam      = align_out.filter { flag, bam -> flag == 'clr' }
 // ----------------------
 // TOOL PROCESSES
 // ----------------------
-process BUILD_ENV {
-    publishDir "${params.outdir}/env", mode: 'copy'
-    tag "docker-build"
-
-    input:
-        path "Dockerfile"
-
-    output:
-        path "docker_build.log"
-
-    script:
-        """
-        echo ">>> Building metapolisher-tools:latest..."
-        docker build -t metapolisher-tools:latest -f Dockerfile .
-
-        echo ">>> Pulling external images..."
-        docker pull google/deepvariant:1.9.0
-        docker pull kishwars/pepper_deepvariant:r0.8
-        docker pull mobinasri/flagger:v1.1.0--15d859f71ec26384837dee0add731b50aac158db
-
-        echo ">>> Done" > docker_build.log
-        """
-}
 
 process PARLIAMENT2 {
+    container 'metapolisher-tools:latest'
     publishDir "${params.outdir}/vcfs", mode: 'copy'
     tag "${bam.simpleName}"
 
@@ -98,7 +101,7 @@ process PARLIAMENT2 {
 
     script:
         """
-        parliament2.sh ${bam} ${bam}.bai ${params.assembly} ${params.assembly}.fai parliament2_out
+        bash /scripts/parliament2.sh ${bam} ${bam}.bai ${params.assembly} ${params.assembly}.fai parliament2_out
         """
 }
 
@@ -108,7 +111,7 @@ process DEEPVARIANT {
     tag "${bam.simpleName}"
 
     input: path bam
-    output: path "*.vcf"
+    output: path "*.vcf.gz"
 
     script:
         """
@@ -116,8 +119,7 @@ process DEEPVARIANT {
             --model_type=WGS \
             --ref=${params.assembly} \
             --reads=${bam} \
-            --output_vcf=deepvariant_out.vcf \
-            --output_gvcf=deepvariant_out.g.vcf.gz \
+            --output_vcf=deepvariant_out.vcf.gz \
             --num_shards=8
         """
 }
@@ -132,15 +134,18 @@ process PEPPER {
 
     script:
         """
-        run_pepper_deepvariant.sh \
-            --bam ${bam} \
-            --fasta ${params.assembly} \
-            --output_dir pepper_out \
-            --output_prefix pepper
+        run_pepper_margin_deepvariant call_variant \
+            -b ${bam} \
+            -f ${params.assembly} \
+            -o pepper_out \
+            -p pepper \
+            -t 4 \
+            --ont_r9_guppy5_sup
         """
 }
 
 process SNIFFLES {
+    container 'metapolisher-tools:latest'
     publishDir "${params.outdir}/vcfs", mode: 'copy'
     tag "${bam.simpleName}"
 
@@ -149,11 +154,12 @@ process SNIFFLES {
 
     script:
         """
-        sniffles.sh ${params.assembly} ${bam} sniffles_out.vcf 8 3
+        bash /scripts/sniffles.sh ${params.assembly} ${bam} sniffles_out.vcf 8 3
         """
 }
 
 process JASMINE {
+    container 'metapolisher-tools:latest'
     publishDir "${params.outdir}/vcfs", mode: 'copy'
     tag "jasmine"
 
@@ -162,7 +168,7 @@ process JASMINE {
 
     script:
         """
-        jasmine.sh ${vcfs}
+        bash /scripts/jasmine.sh ${vcfs}
         """
 }
 
@@ -176,11 +182,12 @@ process FLAGGER {
 
     script:
         """
-        flagger.sh flagger_work ${assembly} ${bam}
+        bash /scripts/flagger.sh flagger_work ${assembly} ${bam}
         """
 }
 
 process REPEATMASKER {
+    container 'metapolisher-tools:latest'
     publishDir "${params.outdir}/repeatmasker", mode: 'copy'
     tag "repeatmasker"
 
@@ -189,11 +196,12 @@ process REPEATMASKER {
 
     script:
         """
-        Repeatmasker.sh /usr/local/bin/repeatmasker ${assembly}
+        bash /scripts/Repeatmasker.sh /usr/local/bin/repeatmasker ${assembly}
         """
 }
 
 process MERFIN {
+    container 'metapolisher-tools:latest'
     publishDir "${params.outdir}/merfin", mode: 'copy'
     tag "${vcf.simpleName}"
 
@@ -202,11 +210,12 @@ process MERFIN {
 
     script:
         """
-        merfin.sh ${assembly} meryl_db ${vcf}
+        bash /scripts/merfin.sh ${assembly} meryl_db ${vcf}
         """
 }
 
 process CATBOOST {
+    container 'metapolisher-tools:latest'
     publishDir "${params.outdir}/catboost", mode: 'copy'
     tag "${vcf.simpleName} (${flag})"
 
@@ -215,14 +224,14 @@ process CATBOOST {
 
     script:
         """
-        python vcf_catboost.py \
+        python /scripts/vcf_catboost.py \
             --vcfs ${vcf} \
             --truth_vcf ${params.truth_vcf} \
-            --repeat_gff repeatmasker_output.gff3 \
-            --merfin_pass_vcf merfin_pass.vcf \
+            --repeat_gff /results/repeatmasker/repeatmasker_output.gff3 \
+            --merfin_pass_vcf /results/merfin/merfin_pass.vcf \
             --liftoff_gff liftoff.gff3 \
             --low_complex low_complexity.bed \
-            --flagger flagger_prediction.bed \
+            --flagger /results/flagger/flagger_prediction.bed \
             --out_vcf filtered_output.vcf \
             --threshold 0.9 \
             --out_table variant_features.tsv
@@ -232,41 +241,32 @@ process CATBOOST {
 // ----------------------
 // WORKFLOW LOGIC
 // ----------------------
-BUILD_ENV(Dockerfile)
 
-illumina_bam_only = illumina_bam.map{ flag, bam -> bam }.into { illum1; illum2 }
-parliament_vcf = PARLIAMENT2(illum1)
-deepvariant_illumina_vcf = DEEPVARIANT(illum2)
+workflow {
+    BUILD_ENV(dockerfile_ch)
 
-hifi_bam_only = hifi_bam.map{ flag, bam -> bam }.into { h1; h2 }
-sniffles_hifi_vcf = SNIFFLES(h1)
-deepvariant_hifi_vcf = DEEPVARIANT(h2)
+    illumina_bam_only = illumina_bam.map{ flag, bam -> bam }.into { illum1; illum2 }
+    parliament_vcf = PARLIAMENT2(illum1)
+    deepvariant_illumina_vcf = DEEPVARIANT(illum2)
 
-ont_bam_only = ont_bam.map{ flag, bam -> bam }.into { o1; o2 }
-sniffles_ont_vcf = SNIFFLES(o1)
-pepper_vcf = PEPPER(o2)
+    hifi_bam_only = hifi_bam.map{ flag, bam -> bam }.into { h1; h2 }
+    sniffles_hifi_vcf = SNIFFLES(h1)
+    deepvariant_hifi_vcf = DEEPVARIANT(h2)
 
-clr_bam_only = clr_bam.map{ flag, bam -> bam }
-sniffles_clr_vcf = SNIFFLES(clr_bam_only)
+    ont_bam_only = ont_bam.map{ flag, bam -> bam }.into { o1; o2 }
+    sniffles_ont_vcf = SNIFFLES(o1)
+    pepper_vcf = PEPPER(o2)
 
-all_sniffles_vcf = Channel.merge(sniffles_hifi_vcf, sniffles_ont_vcf, sniffles_clr_vcf).collect().set { sniffles_list }
-jasmine_vcf = JASMINE(sniffles_list)
+    clr_bam_only = clr_bam.map{ flag, bam -> bam }
+    sniffles_clr_vcf = SNIFFLES(clr_bam_only)
 
-hifi_bam_for_flagger = hifi_bam.map{ flag, bam -> bam }.first()
-flagger_out = FLAGGER(assembly_ch, hifi_bam_for_flagger)
+    all_sniffles_vcf = Channel.merge(sniffles_hifi_vcf, sniffles_ont_vcf, sniffles_clr_vcf).collect().set { sniffles_list }
+    jasmine_vcf = JASMINE(sniffles_list)
 
-repeatmasker_out = REPEATMASKER(assembly_ch)
+    hifi_bam_for_flagger = hifi_bam.map{ flag, bam -> bam }.first()
+    flagger_out = FLAGGER(assembly_ch, hifi_bam_for_flagger)
 
-all_vcf = Channel.merge(parliament_vcf, deepvariant_illumina_vcf, deepvariant_hifi_vcf, pepper_vcf, jasmine_vcf)
-vcf_for_merfin = all_vcf.filter { vcf -> vcf.name != file(params.truth_vcf).name }
-merfin_out = MERFIN(vcf_for_merfin, truth_vcf_ch, assembly_ch)
+    repeatmasker_out = REPEATMASKER(assembly_ch)
 
-snv_vcf = Channel.merge(deepvariant_illumina_vcf, deepvariant_hifi_vcf, pepper_vcf).map { vcf -> tuple('snv', vcf) }
-sv_vcf  = Channel.merge(parliament_vcf, jasmine_vcf).map { vcf -> tuple('sv', vcf) }
-
-all_for_catboost = Channel.merge(snv_vcf, sv_vcf)
-CATBOOST(all_for_catboost.map{ flag, vcf -> tuple(flag, vcf) }, annotation_ch)
-
-workflow.onComplete {
-    println "Pipeline finished. Output directory: ${params.outdir}"
-}
+    all_vcf = Channel.merge(parliament_vcf, deepvariant_illumina_vcf, deepvariant_hifi_vcf, pepper_vcf, jasmine_vcf)
+    vcf_for_merfin = all_vcf.filter { vcf -> vcf.name != file(params.truth_vcf).name }
