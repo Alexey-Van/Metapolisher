@@ -1,0 +1,5 @@
+reads_path  flag
+/data/SRR1997411_1.fastq.gz illumina
+/data/SRR1997411_2.fastq.gz illumina
+/data/SRR9087600.fastq.gz   hifi
+/data/CHM13_T2T_ONT_fastq_guppy_6.3.7_hac_aa.fa ont

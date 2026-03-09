@@ -48,7 +48,7 @@ process BUILD_ENV {
         echo ">>> Pulling external images..."
         docker pull google/deepvariant:1.9.0
         docker pull kishwars/pepper_deepvariant:r0.8
-        docker pull mobinasri/flagger:latest
+        docker pull mobinasri/flagger:v1.1.0--15d859f71ec26384837dee0add731b50aac158db
 
         echo ">>> Done" > docker_build.log
         """
@@ -173,7 +173,7 @@ process JASMINE {
 }
 
 process FLAGGER {
-    container 'mobinasri/flagger:latest'
+    container 'mobinasri/flagger:v1.1.0--15d859f71ec26384837dee0add731b50aac158db'
     publishDir "${params.outdir}/flagger", mode: 'copy'
     tag "flagger"
 
@@ -243,7 +243,6 @@ process CATBOOST {
 // ----------------------
 
 workflow {
-    BUILD_ENV(dockerfile_ch)
 
     illumina_bam_only = illumina_bam.map{ flag, bam -> bam }.into { illum1; illum2 }
     parliament_vcf = PARLIAMENT2(illum1)
