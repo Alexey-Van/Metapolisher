@@ -4,18 +4,19 @@ set -euo pipefail
 INPUT_BAM="$1"
 INPUT_FASTA="$2"
 OUTPUT_DIR="$3"
-OUTPUT_PREFIX="chm13_chr1" 
-THREADS=4
+OUTPUT_PREFIX="$4"
+THREADS="$5"
 
-CONTAINER_HOME="/home/pepper_run"
-CONTAINER_BAM="$CONTAINER_HOME/ont_winnowmap.sorted.bam"
-CONTAINER_FASTA="$CONTAINER_HOME/chm13_chr1_mutated.fa"
-CONTAINER_OUT="$CONTAINER_HOME/output"
+CONTAINER_HOME="/workspace"
+CONTAINER_BAM="$CONTAINER_HOME/$(realpath --relative-to="$PWD" "$INPUT_BAM")"
+CONTAINER_FASTA="$CONTAINER_HOME/$(realpath --relative-to="$PWD" "$INPUT_FASTA")"
+CONTAINER_OUT="$CONTAINER_HOME/$OUTPUT_DIR"
 
-docker run --ipc=host \
-  -v "$(dirname "$INPUT_BAM"):$CONTAINER_HOME" \
-  -v "$(dirname "$INPUT_FASTA"):$CONTAINER_HOME" \
-  -v "$OUTPUT_DIR:$OUTPUT_DIR" \
+mkdir -p "$OUTPUT_DIR"
+chmod 777 "$OUTPUT_DIR"
+
+docker run --ipc=host --user root \
+  -v "$PWD:$CONTAINER_HOME" \
   kishwars/pepper_deepvariant:r0.8 \
   run_pepper_margin_deepvariant call_variant \
     -b "$CONTAINER_BAM" \

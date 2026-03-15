@@ -1,16 +1,43 @@
 FROM mambaorg/micromamba:1.5.8
 
-# Создаём окружение tools и ставим Sniffles2
-RUN micromamba install -y -n base -c bioconda -c conda-forge sniffles=2.2 && \
-    micromamba clean -a -y
+USER root
 
-# Устанавливаем остальные инструменты
-RUN micromamba install -y -n base -c bioconda -c conda-forge \
+# каналы
+RUN micromamba config append channels conda-forge && \
+    micromamba config append channels bioconda && \
+    micromamba config append channels defaults
+
+# ---------------------------
+# mapping env
+# ---------------------------
+RUN micromamba create -y -n mapping \
+    winnowmap \
+    bwa-mem2 \
+    samtools \
+    && micromamba clean -a -y
+
+# ---------------------------
+# variant calling env
+# ---------------------------
+RUN micromamba create -y -n variant \
     sniffles=2.2 \
+    bcftools \
     jasmine \
+    && micromamba clean -a -y
+
+# ---------------------------
+# polishing env
+# ---------------------------
+RUN micromamba create -y -n polishing \
     merfin \
     repeatmasker \
-    python=3.10 \
+    && micromamba clean -a -y
+
+# ---------------------------
+# python env
+# ---------------------------
+RUN micromamba create -y -n ml \
+    python=3.11 \
     numpy \
     pandas \
     pysam \
@@ -21,13 +48,12 @@ RUN micromamba install -y -n base -c bioconda -c conda-forge \
     && micromamba clean -a -y
 
 
-USER root
-
+# pipeline
 COPY . /opt/pipeline/
+
 RUN find /opt/pipeline -type f -name "*.sh" -exec cp {} /usr/local/bin/ \; && \
     chmod +x /usr/local/bin/*.sh
 
-USER mambauser
-
-
 ENV PATH="/usr/local/bin:${PATH}"
+
+USER mambauser
