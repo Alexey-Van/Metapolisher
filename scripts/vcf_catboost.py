@@ -410,6 +410,9 @@ def predict_block(df,model):
         "TRUE_VARIANT","CHROM","POS","END",
         "REF","ALT","SVTYPE","SVTYPE_NORM"
     }
+    
+    fi = model.get_feature_importance(prettified=True)
+    print(fi.head(10))
 
     X=df.drop(columns=[c for c in drop_cols if c in df.columns])
 

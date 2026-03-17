@@ -11,13 +11,9 @@ if [ "$#" -lt 2 ]; then
   exit 1
 fi
 
-REPEATMASKER_PATH=$1
 GENOME=$2
 
-# ------------------------
-# Add RepeatMasker to PATH
-# ------------------------
-export PATH=$REPEATMASKER_PATH:$PATH
+micromamba create -n repeatmasker -c bioconda repeatmasker trf rmblast
 
 # ------------------------
 # Run RepeatMasker
