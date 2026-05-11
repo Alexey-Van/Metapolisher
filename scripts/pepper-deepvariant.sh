@@ -13,9 +13,8 @@ CONTAINER_FASTA="$CONTAINER_HOME/$(realpath --relative-to="$PWD" "$INPUT_FASTA")
 CONTAINER_OUT="$CONTAINER_HOME/$OUTPUT_DIR"
 
 mkdir -p "$OUTPUT_DIR"
-chmod 777 "$OUTPUT_DIR"
 
-docker run --ipc=host --user root \
+docker run --user root \
   -v "$PWD:$CONTAINER_HOME" \
   kishwars/pepper_deepvariant:r0.8 \
   run_pepper_margin_deepvariant call_variant \

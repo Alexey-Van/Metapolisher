@@ -14,10 +14,6 @@ import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")
 from sklearn.metrics import precision_recall_curve
-import matplotlib.pyplot as plt
-from sklearn.metrics import auc
-from sklearn.calibration import calibration_curve
-from sklearn.metrics import confusion_matrix
 from sklearn.metrics import roc_curve
 import random
 from sklearn.metrics import classification_report
@@ -166,10 +162,9 @@ def load_telomers(bed_path):
     return telomeres
 
 def is_excluded(chrom, pos, end, exclude_dict):
-    if chrom != 'chrM':
-        for start, stop in exclude_dict[chrom]:
-            if not (end < start or pos > stop):
-                return True
+    for start, stop in exclude_dict[chrom]:
+        if not (end < start or pos > stop):
+            return True
 
     return False
 
@@ -199,7 +194,7 @@ def load_vcf_as_df(path, exclude_trees=None):
         info = dict(v.INFO)
         
         if exclude_trees is not None:
-            if is_excluded(v.CHROM, v.POS, v.end, exclude_trees):
+            if is_excluded(v.CHROM, v.POS, v.END, exclude_trees):
                 continue  
 
         
@@ -410,7 +405,7 @@ def annotate_interval(df,trees,col):
         zip(df.CHROM,df.POS,df.END)
     ):
 
-        hits=trees.get(chrom,IntervalTree()).overlap(pos-1,end)
+        hits=trees.get(chrom,IntervalTree()).overlap(pos,end)
 
         if hits:
 
@@ -458,7 +453,7 @@ def build_truth_labels(df, truth):
         hits = np.zeros(len(pos), dtype=bool)
 
         while i < len(pos) and j < len(t):
-            if int(pos[i]) == int(t[j]):
+            if abs(pos[i] - t[j]) <= 1:
                 hits[i] = True
                 i += 1
             elif t[j] < pos[i] - 1:
@@ -551,7 +546,7 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
     if df.empty:
         return
 
-    df=df.sort_values(param,ascending=False)
+    df=df.sort_values("ML_PROB",ascending=False)
     df=df.drop_duplicates(["CHROM","POS"])
 
     best={(r.CHROM,r.POS):r for r in df.itertuples()}
@@ -560,10 +555,10 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
 
     header=pysam.VariantFile(template).header.copy()
 
-    if param not in header.info:
+    if "ML_PROB" not in header.info:
 
         header.info.add(
-            param,
+            "ML_PROB",
             1,
             "Float",
             "CatBoost probability"
@@ -591,7 +586,7 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
                 alleles=v.alleles
             )
 
-            nv.info[param]=float(r.ML_PROB)
+            nv.info["ML_PROB"]=float(r.ML_PROB)
 
             out.write(nv)
 
@@ -672,6 +667,16 @@ def main(args):
         random_state=42
     )
 
+    # chroms_present = [c for c in df["CHROM"].unique()]
+
+    # train_chroms = chroms_present[:10]      # chr1–chr16
+    # val_chroms   = chroms_present[10:17]    # chr17–chr19
+    # test_chroms  = chroms_present[17:]      # chr20–chr22, X, Y, M
+
+    # train_df = df[df["CHROM"].isin(train_chroms)]
+    # val_df   = df[df["CHROM"].isin(val_chroms)]
+    # test_df  = df[df["CHROM"].isin(test_chroms)]
+
     print(len(train_df), len(val_df), len(test_df))
     
     train_df[f"ML_PROB"] = 0.0
@@ -696,18 +701,33 @@ def main(args):
     cat_cols = X_train.select_dtypes(include="object").columns.tolist() 
 
     param_grid = [
-        dict(random_seed=254, l2_leaf_reg=5, depth=4, eval_metric="AUC", loss_function="Logloss"),
-        dict(random_seed=487, l2_leaf_reg=0, depth=6, eval_metric="PRAUC", loss_function="Logloss"),
-        dict(random_seed=789, l2_leaf_reg=2, depth=8, eval_metric="AUC", loss_function="Logloss", subsample=0.7, rsm=0.8, random_strength=1, bagging_temperature=1),
+        dict(random_seed=11),
+        dict(random_seed=22),
+        dict(random_seed=33),
+        dict(random_seed=44),
+        dict(random_seed=55),
+        dict(random_seed=23),
+        dict(random_seed=42),
+        dict(random_seed=43),
+        dict(random_seed=58),
+        dict(random_seed=102),
     ]
 
     for i, params in enumerate(param_grid):
         print(f"\n[{i+1}/{len(param_grid)}] Обучение модели с параметрами: {params}")
 
         model = CatBoostClassifier(
-            iterations=100,
-            early_stopping_rounds=20,
+            iterations=300,
             learning_rate=0.03,
+            loss_function="Logloss",
+            l2_leaf_reg=10,
+            auto_class_weights="SqrtBalanced",
+            depth=6,
+            subsample=0.7,
+            rsm=0.8,
+            random_strength=2,
+            bagging_temperature=2,
+            eval_metric="PRAUC",
             verbose=100,
             posterior_sampling=True,
             **params
@@ -721,7 +741,7 @@ def main(args):
         # подбор threshold под precision >= 0.9
         precision, recall, thresholds = precision_recall_curve(y_val, val_prob)
 
-        target_precision = 0.99
+        target_precision = 0.90
         best_recall = 0
         best_threshold = 0
 
@@ -731,8 +751,6 @@ def main(args):
                 best_threshold = t
 
         print(f"target_precision = {target_precision}, best_recall = {best_recall}, best_threshold = {best_threshold}")
-        fi = model.get_feature_importance(prettified=True)
-        print(fi.head(8))
 
         results.append({
             "params": params,
@@ -746,20 +764,77 @@ def main(args):
     N = 10
     top_models = sorted(results, key=lambda x: x["recall"], reverse=True)[:N]
 
-    print("Лучшая модель:", top_models[1]["params"])
+    val_probs_list = [m["model"].predict_proba(X_val)[:, 1] for m in top_models]
+    val_probs_ens = np.mean(val_probs_list, axis=0)
 
-    print(f"[7] prediction for model")
+    precision, recall, thresholds = precision_recall_curve(y_val, val_probs_ens)
+
+    best_recall = 0
+    best_threshold = 0
+
+    for p, r, t in zip(precision, recall, np.append(thresholds, 1.0)):
+        if p >= 0.90 and r > best_recall:
+            best_recall = r
+            best_threshold = t
+
+    print("\nАнсамбль:")
+    print("Recall:", best_recall)
+    print("Threshold:", best_threshold)
+
+
+    print(f"[7] prediction for ensemble")
+
+    # извлекаем модели и их recall
+    models = [x["model"] for x in top_models]
+    recalls = np.array([x["recall"] for x in top_models])
+
+    # нормируем веса
+    weights = recalls / recalls.sum()
+
+    print("Weights:", weights)
+
 
     test_prob_one = top_models[1]["model"].predict_proba(test_df[features])[:, 1]
 
     test_pred_one = (test_prob_one >= top_models[1]["threshold"]).astype(int)
 
-    print("Отчёт для одной модели на test\n\n", classification_report(test_df["TRUE_VARIANT"], test_pred_one))
+    print("Отчёт для одной модели\n\n", classification_report(test_df["TRUE_VARIANT"], test_pred_one))
 
-    df["ML_PROB"] = top_models[1]["model"].predict_proba(df[features])[:, 1]
-    df["ML_PRED"] = (df["ML_PROB"] >= top_models[1]["threshold"]).astype(int)
+    # вероятности всех моделей на test
+    test_probs_list = [
+        m.predict_proba(test_df[features])[:, 1]
+        for m in models
+    ]
 
-    print("Финальный отчёт для одной модели на всём геноме\n\n", classification_report(df["TRUE_VARIANT"], df["ML_PRED"]))
+    # взвешенное усреднение
+    test_prob = np.average(test_probs_list, axis=0, weights=weights)
+
+    # бинарные предсказания
+    test_pred = (test_prob >= best_threshold).astype(int)
+
+    print("Отчёт для ансамбля\n\n", classification_report(test_df["TRUE_VARIANT"], test_pred))
+
+    # вероятности ансамбля по всему геному
+    all_probs_list = [
+        m["model"].predict_proba(df[features])[:, 1]
+        for m in top_models
+    ]
+
+    probs = np.vstack(all_probs_list)          # (n_models, n_variants)
+    w = np.array(weights, dtype=float)        # (n_models,)
+
+    df["ML_PROB"] = np.average(probs, axis=0, weights=w)
+    df["ML_PRED"] = (df["ML_PROB"] >= best_threshold).astype(int)
+
+
+    print("Финальный отчёт для финального ансамбля\n\n", classification_report(df["TRUE_VARIANT"], df["ML_PRED"]))
+
+    df.loc[df.index, f"ML_PROB_one"] = predict_block(df, top_models[1]["model"])
+    df["ML_PRED_one"] = (df["ML_PROB_one"] >= top_models[1]["best_threshold"]).astype(int)
+
+    print("Финальный отчёт для финального ансамбля\n\n", classification_report(df["TRUE_VARIANT"], df["ML_PRED_one"]))
+
+
    
     out_tsv = f"{args.prefix}.variants.tsv"
     df.to_csv(out_tsv, sep="\t", index=False)
@@ -770,11 +845,9 @@ def main(args):
 
     df_snv_sub = df[df.SVTYPE_NORM == "SNV"]
 
-    write_vcf(df_snv_sub, args.vcfs, f"{args.prefix}.one_model.vcf", top_models[1]["threshold"], "ML_PROB")
+    write_vcf(df_snv_sub, args.vcfs, f"{args.prefix}.snv.vcf", best_threshold, ML_PROB)
 
-    top_models[1]["model"].save_model(f"model_{args.prefix}.cbm")
-
-    df = df_snv_sub
+    write_vcf(df_snv_sub, args.vcfs, f"{args.prefix}.snv.vcf", top_models[1]["best_threshold"], ML_PROB_one)
 
     print(f"Model ensemble done.")
 
@@ -795,76 +868,6 @@ def main(args):
     plt.xlabel("Recall")
     plt.ylabel("Precision")
     plt.savefig(f"pr_curve_{args.prefix}.png", dpi=200)
-
-    plt.figure()
-    plt.hist(df.loc[df.TRUE_VARIANT == 0, "ML_PROB"], bins=50, alpha=0.5, label="0")
-    plt.hist(df.loc[df.TRUE_VARIANT == 1, "ML_PROB"], bins=50, alpha=0.5, label="1")
-    plt.legend()
-    plt.yscale("log")
-
-    plt.savefig(f"hist_wo_log_{args.prefix}.png", dpi=200)
-
-    # y_val — истинные метки
-    # model — обученный CatBoostClassifier
-    # X_val — валидационные признаки
-
-    y_pred_proba = top_models[1]["model"].predict_proba(X_val)[:, 1]
-
-    # -----------------------------
-    # 1. ROC Curve
-    # -----------------------------
-    fpr, tpr, _ = roc_curve(y_val, y_pred_proba)
-    roc_auc = auc(fpr, tpr)
-
-    plt.figure(figsize=(6, 5))
-    plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.4f}")
-    plt.plot([0, 1], [0, 1], "k--")
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(f"roc_curve_{args.prefix}.png", dpi=200)
-
-    # -----------------------------
-    # 2. Precision–Recall Curve
-    # -----------------------------
-    precision, recall, _ = precision_recall_curve(y_val, y_pred_proba)
-
-    plt.figure(figsize=(6, 5))
-    plt.plot(recall, precision)
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.title("Precision–Recall Curve")
-    plt.grid(True)
-    plt.savefig(f"precision_recall_curve_{args.prefix}.png", dpi=200)
-
-    # -----------------------------
-    # 3. Calibration Curve
-    # -----------------------------
-    prob_true, prob_pred = calibration_curve(y_val, y_pred_proba, n_bins=10)
-
-    plt.figure(figsize=(6, 5))
-    plt.plot(prob_pred, prob_true, marker="o")
-    plt.plot([0, 1], [0, 1], "k--")
-    plt.xlabel("Predicted probability")
-    plt.ylabel("True probability")
-    plt.title("Calibration Curve")
-    plt.grid(True)
-    plt.savefig(f"calibration_curve_{args.prefix}.png", dpi=200)
-
-
-    # Confusion Matrix
-    cm = confusion_matrix(df["TRUE_VARIANT"], df["ML_PRED)"])
-    labels = ["Negative", "Positive"]
-
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
-                xticklabels=labels, yticklabels=labels)
-    plt.xlabel("Predicted label")
-    plt.ylabel("True label")
-    plt.title(f"Confusion Matrix (threshold = {threshold})")
-    plt.savefig(f"matrix_{args.prefix}.png", dpi=200)
 
 
 if __name__=="__main__":

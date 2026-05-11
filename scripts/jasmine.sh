@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Проверка аргументов
-if [ "$#" -lt 3 ]; then
+if [ "$#" -lt 2 ]; then
     echo "Использование: $0 genome.fa out.vcf vcf1.vcf vcf2.vcf ..."
     exit 1
 fi
@@ -19,9 +19,9 @@ for vcf in "$@"; do
 done
 
 # Запуск Jasmine
-java -Xmx8g -jar jasmine.jar \
-    "$VCF_LIST" \
-    "$OUTVCF" \
+java -Xmx8g -jar /mnt/data/vanichkinao/MetaPolisher/Jasmine/jasmine.jar \
+    file_list="$VCF_LIST" \
+    out_file="$OUTVCF" \
     --genome "$GENOME" \
     --threads 8 \
     --output_genotypes

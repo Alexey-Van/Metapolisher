@@ -1,148 +1,123 @@
 nextflow.enable.dsl = 2
 
-include { ALIGN } from './modules/align'
-include { PARLIAMENT2 } from './modules/parliament2'
-include { SNIFFLES } from './modules/sniffles'
-include { DEEPVARIANT } from './modules/deepvariant'
-include { PEPPER } from './modules/pepper'
-include { JASMINE } from './modules/jasmine'
-include { MERFIN } from './modules/merfin'
-include { IRIS } from './modules/iris'
-
-include { REPEATMASKER } from './modules/repeatmasker'
-include { FLAGGER } from './modules/flagger'
-
-include { CATBOOST } from './modules/catboost'
-
+include { CHECK        } from './modules/check_containers'
+include { ALIGN_ALL        } from './modules/align'
+include { DEEPVARIANT      } from './modules/deepvariant'
+include { PEPPER           } from './modules/pepper'
+include { ORIGINAL_T2T     } from './modules/original_t2t'
+include { AUTO_POLISH      } from './modules/automated_polishing'
+include { NP2              } from './modules/nextpolish2'
+include { SNIFFLES as SNIFFLES_ONT   } from './modules/sniffles'
+include { SNIFFLES as SNIFFLES_HIFI  } from './modules/sniffles'
+include { CUTESV as CUTESV_ONT       } from './modules/cutesv'
+include { CUTESV as CUTESV_HIFI      } from './modules/cutesv'
+include { FLAGGER          } from './modules/flagger'
+include { MERQURY          } from './modules/merqury'
 
 workflow {
+    ready       = CHECK()
+    draft       = Channel.fromPath(params.draft)
+    draft_fai = Channel.fromPath(params.draft+".fai")
+    hifi        = Channel.fromPath(params.hifi)
+    ont         = Channel.fromPath(params.ont)
 
-    assembly_ch = Channel.fromPath(params.assembly)
-    reads_ch = Channel
-        .fromPath(params.reads_table)
-        .splitCsv(header:true, sep:/\s+/)
-        .map { row -> tuple(file(row.reads_path), row.flag) }
+    illumina_r1 = Channel.fromPath(params.illumina_r1)
+    illumina_r2 = Channel.fromPath(params.illumina_r2)
 
-    /*
-    --------------------
-    ALIGN
-    --------------------
-    */
-
-    align_out = ALIGN(assembly_ch, reads_ch)
-
-    illumina_bam = align_out.filter{f,b -> f=="illumina"}.map{f,b->b}
-    hifi_bam     = align_out.filter{f,b -> f=="hifi"}.map{f,b->b}
-    ont_bam      = align_out.filter{f,b -> f=="ont"}.map{f,b->b}
-    clr_bam      = align_out.filter{f,b -> f=="clr"}.map{f,b->b}
-
-
-    /*
-    --------------------
-    SV CALLERS
-    --------------------
-    */
-
-    parliament_vcf = PARLIAMENT2(illumina_bam)
-
-    sniffles_vcf = SNIFFLES(
-        Channel.merge(hifi_bam, ont_bam, clr_bam)
+    align = ALIGN_ALL(
+        ready,
+        draft,
+        hifi,
+        ont,
+        illumina_r1,
+        illumina_r2
     )
 
-    sv_vcfs = Channel.merge(
-        parliament_vcf,
-        sniffles_vcf
+    deepvariant = DEEPVARIANT(
+        ready,
+        draft,
+        draft_fai,
+        align.hifi_bam,
+        align.illumina_bam
     )
 
-
-    /*
-    --------------------
-    SNV CALLERS
-    --------------------
-    */
-
-    deepvariant_vcf = DEEPVARIANT(
-        Channel.merge(illumina_bam, hifi_bam)
+    pepper = PEPPER(
+        ready,
+        align.ont_bam,
+        align.ont_bai,
+        draft,
+        draft_fai
     )
 
-    pepper_vcf = PEPPER(ont_bam)
-
-    snv_vcfs = Channel.merge(
-        deepvariant_vcf,
-        pepper_vcf
+    t2t = ORIGINAL_T2T(
+        ready,
+        deepvariant.vcf,
+        pepper.vcf,
+        draft,
+        illumina_r1,
+        illumina_r2,
+        hifi
     )
 
-
-    /*
-    --------------------
-    MERGE VARIANTS
-    --------------------
-    */
-
-    sv_merged = JASMINE(sv_vcfs.collect())
-    snv_merged = JASMINE(snv_vcfs.collect())
-
-
-    /*
-    --------------------
-    MERFIN
-    --------------------
-    */
-
-    merfin_out = MERFIN(
-        assembly_ch,
-        sv_merged
+    auto_polish = AUTO_POLISH(
+        ready,
+        draft,
+        hifi,
+        t2t.readmers_meryl
     )
 
-
-    /*
-    --------------------
-    IRIS (SV polishing)
-    --------------------
-    */
-
-    IRIS(
-        assembly_ch,
-        hifi_bam.first(),
-        sv_merged,
-        parliament_vcf
+    np2 = NP2(
+        ready,
+        draft,
+        align.hifi_bam,
+        illumina_r1,
+        illumina_r2
     )
 
-
-    /*
-    --------------------
-    GENOME ANNOTATION
-    --------------------
-    */
-
-    repeat_gff = REPEATMASKER(assembly_ch)
-
-    flagger_out = FLAGGER(
-        assembly_ch,
-        hifi_bam.first()
+    sniffles_ont = SNIFFLES_ONT(
+        ready,
+        draft,
+        align.ont_bam,
+        align.ont_bai,
+        "ont"
     )
 
-
-    /*
-    --------------------
-    CATBOOST
-    --------------------
-    */
-
-    CATBOOST(
-        Channel.value("SV"),
-        sv_merged,
-        repeat_gff,
-        flagger_out,
-        merfin_out
+    sniffles_hifi = SNIFFLES_HIFI(
+        ready,
+        draft,
+        align.hifi_bam,
+        align.hifi_bai,
+        "hifi"
     )
 
-    CATBOOST(
-        Channel.value("SNV"),
-        snv_merged,
-        repeat_gff,
-        flagger_out,
-        merfin_out
+    cutesv_ont = CUTESV_ONT(
+        ready,
+        draft,
+        align.ont_bam,
+        align.ont_bai,
+        "ont"
+    )
+
+    cutesv_hifi = CUTESV_HIFI(
+        ready,
+        draft,
+        align.hifi_bam,
+        align.hifi_bai,
+        "hifi"
+    )
+
+    flagger = FLAGGER(
+        ready,
+        draft,
+        align.hifi_bam
+    )
+
+    merqury = MERQURY(
+        ready,
+        draft,
+        illumina_r1,
+        illumina_r2
     )
 
 }
+

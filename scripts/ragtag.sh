@@ -37,8 +37,6 @@ echo
 echo "=== Шаг 2: Скафолдинг (сшивание контигов) ==="
 ragtag.py scaffold \
     -t $THREADS \
-    --remove-small 1000 \
-    --no-break \
     $REFERENCE \
     $CORRECTED \
     -o ragtag_scaffold

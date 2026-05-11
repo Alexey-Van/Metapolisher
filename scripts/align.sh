@@ -22,7 +22,7 @@ fi
 
 TYPE=$1
 CONTIGS=$2
-THREADS=4
+THREADS=8
 
 mkdir -p ${TYPE}_bam
 
@@ -39,29 +39,32 @@ case "$TYPE" in
 
     hifi)
         READS=$3
-        OUT="aln/pacbio_hifi"
+        OUT="${TYPE}_bam/pacbio_hifi"
         echo "[INFO] Aligning PacBio HiFi with winnowmap..."
-        winnowmap -W "$MASK" -t $THREADS -ax map-hifi "$CONTIGS" "$READS" > ${OUT}.sam
+        winnowmap --MD -W "$MASK" -t $THREADS -ax map-pb "$CONTIGS" "$READS" > ${OUT}.sam
         ;;
 
     clr)
         READS=$3
-        OUT="aln/pacbio_clr"
+        OUT="${TYPE}_bam/pacbio_clr"
         echo "[INFO] Aligning PacBio CLR with winnowmap..."
-        winnowmap -W "$MASK" -t $THREADS -ax map-pb "$CONTIGS" "$READS" > ${OUT}.sam
+        winnowmap --MD -W "$MASK" -t $THREADS -ax map-pb "$CONTIGS" "$READS" > ${OUT}.sam
         ;;
 
     ont)
         READS=$3
-        OUT="aln/ont"
+        OUT="${TYPE}_bam/ont"
         echo "[INFO] Aligning ONT reads with winnowmap..."
-        winnowmap -W "$MASK" -t $THREADS -ax map-ont "$CONTIGS" "$READS" > ${OUT}.sam
+        winnowmap --MD -W "$MASK" -t $THREADS -ax map-ont "$CONTIGS" "$READS" > ${OUT}.sam
+        samtools view ${OUT}.sam -H > ${OUT}_header.sam
+        samtools view ${OUT}.sam | awk 'length($6) < 64000' >> ${OUT}_header.sam
+        OUT="${TYPE}_bam/ont_header"
         ;;
 
     illumina)
         R1=$3
         R2=$4
-        OUT="aln/illumina"
+        OUT="${TYPE}_bam/illumina"
         echo "[INFO] Aligning Illumina PE reads with bwa-mem2..."
         bwa-mem2 index "$CONTIGS"
         bwa-mem2 mem -t $THREADS "$CONTIGS" "$R1" "$R2" > ${OUT}.sam
@@ -74,7 +77,7 @@ case "$TYPE" in
 esac
 
 echo "[INFO] Converting SAM → sorted BAM..."
-samtools view -@ $THREADS -bS ${OUT}.sam | samtools sort -@ $THREADS -o ${OUT}.sorted.bam
+samtools sort ${OUT}.sam -@ $THREADS -o ${OUT}.sorted.bam
 samtools index ${OUT}.sorted.bam
 
 echo "[DONE] Output files:"

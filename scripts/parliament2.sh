@@ -25,11 +25,11 @@ for f in $bam $bai $ref $fai; do
   fi
 done
 
-mkdir -p $out
+# mkdir -p $out
 
-docker pull dnanexus/parliament2:0.1.11
+# docker pull dnanexus/parliament2:0.1.11
 
-docker run --rm \
+docker run --rm --user root \
   -v $PWD:/home/dnanexus/in \
   -v $PWD/$out:/home/dnanexus/out \
   dnanexus/parliament2:0.1.11 \
@@ -40,6 +40,7 @@ docker run --rm \
   --prefix sample \
   --manta --lumpy --cnvnator \
   --delly_deletion --delly_insertion --delly_inversion --delly_duplication
+
 
 echo ">>> Adding SOURCE=parliament to INFO fields..."
 

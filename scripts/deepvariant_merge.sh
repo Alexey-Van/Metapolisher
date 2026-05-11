@@ -25,11 +25,11 @@ samtools merge -@${THREADS} "${MERGED_BAM}" "${BAM1}" "${BAM2}"
 echo ">>> Indexing merged BAM..."
 samtools index -@${THREADS} "${MERGED_BAM}"
 
-# 3. Launch DeepVariant
-docker pull google/deepvariant:1.9.0
+# # 3. Launch DeepVariant
+# docker pull google/deepvariant:1.9.0
 
 echo ">>> Running DeepVariant..."
-sudo docker run \
+docker run \
 -v "$(dirname ${REF}):$(dirname ${REF})" \
 -v "${OUTPUT_DIR}:${OUTPUT_DIR}" \
 google/deepvariant:1.9.0 \
@@ -39,7 +39,6 @@ google/deepvariant:1.9.0 \
 --reads "${MERGED_BAM}" \
 --output_vcf "${OUTPUT_VCF}" \
 --num_shards "${THREADS}" \
---regions chr1 \
 --intermediate_results_dir "${OUTPUT_DIR}/intermediate_results_dir"
 
 echo ">>> Adding SOURCE=deepvariant to INFO fields..."

@@ -14,10 +14,7 @@ THREADS=$4
 MINSUPPORT=$5
 
 # Minimum length of SV
-MINSVLEN=100
-
-echo ">>> Installing Sniffles (if not already installed)..." 
-conda install -y -c bioconda sniffles=2.7.1
+MINSVLEN=50
 
 echo ">>> Running Sniffles..."
 sniffles \

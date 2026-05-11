@@ -1,16 +1,30 @@
 process SNIFFLES {
 
-    container 'metapolisher-tools:latest'
-    publishDir "${params.outdir}/vcfs", mode:'copy'
+    tag "sniffles_${label}"
+
+    container params.sv_container
+
+    publishDir "${params.outdir}/sniffles", mode: 'copy'
 
     input:
-    path bam
+        val ready
+        path ref
+        path bam
+        path bai
+        val label
 
     output:
-    path "*.vcf"
+        path "sniffles_${label}.vcf", emit: vcf
 
     script:
     """
-    bash /scripts/sniffles.sh ${params.assembly} ${bam} sniffles.vcf 8 3
+    set -euo pipefail
+
+    sniffles \
+        --input ${bam} \
+        --vcf sniffles_${label}.vcf \
+        --reference ${ref} \
+        --threads ${task.cpus} \
+        --minsupport 5
     """
 }

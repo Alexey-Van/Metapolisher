@@ -10,6 +10,7 @@ from cyvcf2 import VCF
 from catboost import CatBoostClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
+from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")
@@ -17,7 +18,6 @@ from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
 from sklearn.metrics import auc
 from sklearn.calibration import calibration_curve
-from sklearn.metrics import confusion_matrix
 from sklearn.metrics import roc_curve
 import random
 from sklearn.metrics import classification_report
@@ -166,10 +166,9 @@ def load_telomers(bed_path):
     return telomeres
 
 def is_excluded(chrom, pos, end, exclude_dict):
-    if chrom != 'chrM':
-        for start, stop in exclude_dict[chrom]:
-            if not (end < start or pos > stop):
-                return True
+    for start, stop in exclude_dict[chrom]:
+        if not (end < start or pos > stop):
+            return True
 
     return False
 
@@ -199,7 +198,7 @@ def load_vcf_as_df(path, exclude_trees=None):
         info = dict(v.INFO)
         
         if exclude_trees is not None:
-            if is_excluded(v.CHROM, v.POS, v.end, exclude_trees):
+            if is_excluded(v.CHROM, v.POS, v.END, exclude_trees):
                 continue  
 
         
@@ -410,7 +409,7 @@ def annotate_interval(df,trees,col):
         zip(df.CHROM,df.POS,df.END)
     ):
 
-        hits=trees.get(chrom,IntervalTree()).overlap(pos-1,end)
+        hits=trees.get(chrom,IntervalTree()).overlap(pos,end)
 
         if hits:
 
@@ -476,69 +475,67 @@ def build_truth_labels(df, truth):
 # CatBoost
 # ------------------------------------------------------------
 
-def train_catboost(df,label="TRUE_VARIANT"):
+import pandas as pd
 
-    drop_cols={
-        label,"CHROM","POS","END",
-        "REF","ALT","SVTYPE","SVTYPE_NORM"
-    }
-
-    X=df.drop(columns=[c for c in drop_cols if c in df.columns])
-    y=df[label]
-
-    if y.nunique()<2:
-        raise RuntimeError("Only one class present")
-
-    cat_cols = X.select_dtypes(include=["object", "string"]).columns.tolist()
-
-    X_tr,X_te,y_tr,y_te=train_test_split(
-        X,y,
-        test_size=0.2,
-        stratify=y,
-        random_state=42
-    )
-
-    model=CatBoostClassifier(
-        iterations=300,
-        depth=6,
-        learning_rate=0.05,
-        loss_function="Logloss",
-        auto_class_weights="Balanced",
-        l2_leaf_reg=5,
-        eval_metric="AUC",
-        verbose=100
-    )
-
-    model.fit(
-        X_tr,
-        y_tr,
-        cat_features=cat_cols,
-        eval_set=(X_te,y_te)
-    )
-
-    auc=roc_auc_score(y_te,model.predict_proba(X_te)[:,1])
-
-    print("AUC =",round(auc,4))
-
-    fi = model.get_feature_importance(prettified=True)
-    print(fi.head(10))
+def downsample_negatives(df, target_col="TRUE_VARIANT", neg_frac=None, neg_to_pos_ratio=None, random_state=42):
+    """
+    Downsample negative class.
     
-    return model
+    Parameters:
+        df: DataFrame
+        target_col: name of target column
+        neg_frac: fraction of negatives to keep (e.g., 0.1)
+        neg_to_pos_ratio: keep N negatives per 1 positive (e.g., 5)
+    """
+    pos = df[df[target_col] == 1]
+    neg = df[df[target_col] == 0]
 
+    if neg_frac is not None:
+        neg_down = neg.sample(frac=neg_frac, random_state=random_state)
+    elif neg_to_pos_ratio is not None:
+        n = min(len(neg), len(pos) * neg_to_pos_ratio)
+        neg_down = neg.sample(n=n, random_state=random_state)
+    else:
+        raise ValueError("Specify either neg_frac or neg_to_pos_ratio")
 
-def predict_block(df,model):
+    df_balanced = pd.concat([pos, neg_down]).sample(frac=1, random_state=random_state)
+    return df_balanced
 
-    drop_cols={
-        "TRUE_VARIANT","CHROM","POS","END",
-        "REF","ALT","SVTYPE","SVTYPE_NORM"
-    }
-    fi = model.get_feature_importance(prettified=True)
-    print(fi.head(5))
+def hard_negative_mining(model, df, features, target_col="TRUE_VARIANT",
+                         threshold=None, top_k=None, ratio=None):
+    """
+    Hard Negative Mining for CatBoost (or any classifier with predict_proba).
+    
+    Parameters:
+        model: trained model
+        df: full dataset
+        features: list of feature columns
+        threshold: keep negatives with pred > threshold
+        top_k: keep top K hardest negatives
+        ratio: keep ratio * number_of_positives negatives
+    """
+    pos = df[df[target_col] == 1]
+    neg = df[df[target_col] == 0].copy()
 
-    X=df.drop(columns=[c for c in drop_cols if c in df.columns])
+    # predict probabilities for negatives
+    neg["pred"] = model.predict_proba(neg[features])[:, 1]
 
-    return model.predict_proba(X)[:,1]
+    if threshold is not None:
+        hard_neg = neg[neg["pred"] > threshold]
 
+    elif top_k is not None:
+        hard_neg = neg.sort_values("pred", ascending=False).head(top_k)
+
+    elif ratio is not None:
+        k = int(len(pos) * ratio)
+        hard_neg = neg.sort_values("pred", ascending=False).head(k)
+
+    else:
+        raise ValueError("Specify threshold, top_k, or ratio")
+
+    # combine positives + hard negatives
+    df_hnm = pd.concat([pos, hard_neg]).sample(frac=1, random_state=42)
+    return df_hnm
 
 # ------------------------------------------------------------
 # VCF writing
@@ -551,7 +548,7 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
     if df.empty:
         return
 
-    df=df.sort_values(param,ascending=False)
+    df=df.sort_values("ML_PROB",ascending=False)
     df=df.drop_duplicates(["CHROM","POS"])
 
     best={(r.CHROM,r.POS):r for r in df.itertuples()}
@@ -560,10 +557,10 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
 
     header=pysam.VariantFile(template).header.copy()
 
-    if param not in header.info:
+    if "ML_PROB" not in header.info:
 
         header.info.add(
-            param,
+            "ML_PROB",
             1,
             "Float",
             "CatBoost probability"
@@ -591,7 +588,7 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
                 alleles=v.alleles
             )
 
-            nv.info[param]=float(r.ML_PROB)
+            nv.info["ML_PROB"]=float(r.ML_PROB)
 
             out.write(nv)
 
@@ -606,175 +603,21 @@ def main(args):
 
     print("[1] loading VCFs")
 
-    exclude_trees = None
-    if args.exclude_telomers:
-        exclude_trees = load_telomers(args.exclude_telomers)
+    df = pd.read_csv('/mnt/data/vanichkinao/MetaPolisher/auto_pipeline/second_try/try_wh_merqury_and_logloss.variants.tsv', sep="\t")
+    df = df.fillna(0)
 
-
-    df=outer_merge_vcfs(args.vcfs, exclude_trees)
-
-    # print("[2] merfin")
-
-    # df=annotate_merfin_support(df,args.merfin_pass_vcf)
-
-    # if args.merfin_scores_bed:
-    #     df=annotate_merfin_scores(df,args.merfin_scores_bed)
-
-    print("[3] annotations")
-
-    # repeat=load_gff3(args.repeat_gff,"Target")
-    # liftoff=load_gff3(args.liftoff_gff)
-    # low_complex=load_bed(args.low_complex)
-    flagger=load_bed(args.flagger,3)
-    merqury=load_bed(args.merqury)
-
-    # annotate_interval(df,repeat,"repeat")
-    # annotate_interval(df,liftoff,"liftoff")
-    # annotate_interval(df,low_complex,"low_complex")
-    annotate_interval(df,flagger,"flagger")
-    annotate_interval(df,merqury,"merqury")
-
-    print("[4] truth")
-
-    truth=load_truth(args.truth_vcf)
-
-    df["TRUE_VARIANT"]=build_truth_labels(df,truth)
-    print("Найдено, вариантов:", sum(df["TRUE_VARIANT"]))
-
-    print("[5] SVTYPE")
-
-    df["SVTYPE_NORM"]=df["SVTYPE"].apply(normalize_svtype)
-
-    df_snv=df[df.SVTYPE_NORM=="SNV"].copy()
-    df_sv=df[df.SVTYPE_NORM=="SV"].copy()
-
-    print("SNV:",len(df_snv))
-    print("SV :",len(df_sv))
-
-    print("[6] spliting")
-
-    # 1. Перемешиваем строки
-    df_shuffled = df.sample(frac=1, random_state=42).reset_index(drop=True)
-
-    # 2. Делим на train и temp (val+test), сохраняя пропорции классов
-    train_df, temp = train_test_split(
-        df_shuffled,
-        test_size=0.3,            # 30% уйдёт на val+test
-        stratify=df_shuffled["TRUE_VARIANT"],
-        random_state=42
-    )
-
-    # 3. Делим temp на val и test, тоже со стратификацией
-    val_df, test_df = train_test_split(
-        temp,
-        test_size=0.5,            # половина temp → test, половина → val
-        stratify=temp["TRUE_VARIANT"],
-        random_state=42
-    )
-
-    print(len(train_df), len(val_df), len(test_df))
+    df["ML_PROB"] = df ["ML_PROB_one"]
+    df["ML_PRED"] = df ["ML_PRED_one"]
     
-    train_df[f"ML_PROB"] = 0.0
-    test_df[f"ML_PROB"] = 0.0
-    val_df[f"ML_PROB"] = 0.0
-
-    features = [c for c in df.columns if c not in ["TRUE_VARIANT", "CHROM", "POS", "END", "REF", "ALT", "SVTYPE", "SVTYPE_NORM"]]
-
-    print(f"\n=== Training model")
-
-    X_train = train_df[features]
-    y_train = train_df["TRUE_VARIANT"]
-    X_val   = val_df[features]
-    y_val   = val_df["TRUE_VARIANT"]
-   
-    # -----------------------------
-    # 2. Обучение и валидация
-    # -----------------------------
-    results = []
-    models = []
-
-    cat_cols = X_train.select_dtypes(include="object").columns.tolist() 
-
-    param_grid = [
-        dict(random_seed=254, l2_leaf_reg=5, depth=4, eval_metric="AUC", loss_function="Logloss"),
-        dict(random_seed=487, l2_leaf_reg=0, depth=6, eval_metric="PRAUC", loss_function="Logloss"),
-        dict(random_seed=789, l2_leaf_reg=2, depth=8, eval_metric="AUC", loss_function="Logloss", subsample=0.7, rsm=0.8, random_strength=1, bagging_temperature=1),
-    ]
-
-    for i, params in enumerate(param_grid):
-        print(f"\n[{i+1}/{len(param_grid)}] Обучение модели с параметрами: {params}")
-
-        model = CatBoostClassifier(
-            iterations=100,
-            early_stopping_rounds=20,
-            learning_rate=0.03,
-            verbose=100,
-            posterior_sampling=True,
-            **params
-        )
-
-        model.fit(X_train, y_train, eval_set=(X_val, y_val), cat_features=cat_cols, use_best_model=True)
-
-        # вероятности на валидации
-        val_prob = model.predict_proba(X_val)[:, 1]
-
-        # подбор threshold под precision >= 0.9
-        precision, recall, thresholds = precision_recall_curve(y_val, val_prob)
-
-        target_precision = 0.99
-        best_recall = 0
-        best_threshold = 0
-
-        for p, r, t in zip(precision, recall, np.append(thresholds, 1.0)):
-            if p >= target_precision and r > best_recall:
-                best_recall = r
-                best_threshold = t
-
-        print(f"target_precision = {target_precision}, best_recall = {best_recall}, best_threshold = {best_threshold}")
-        fi = model.get_feature_importance(prettified=True)
-        print(fi.head(8))
-
-        results.append({
-            "params": params,
-            "model": model,
-            "recall": best_recall,
-            "threshold": best_threshold
-        })
-    
-    save_hyperparam_results(results, f"{args.prefix}_hyperparams.tsv")
-
-    N = 10
-    top_models = sorted(results, key=lambda x: x["recall"], reverse=True)[:N]
-
-    print("Лучшая модель:", top_models[1]["params"])
-
-    print(f"[7] prediction for model")
-
-    test_prob_one = top_models[1]["model"].predict_proba(test_df[features])[:, 1]
-
-    test_pred_one = (test_prob_one >= top_models[1]["threshold"]).astype(int)
-
-    print("Отчёт для одной модели на test\n\n", classification_report(test_df["TRUE_VARIANT"], test_pred_one))
-
-    df["ML_PROB"] = top_models[1]["model"].predict_proba(df[features])[:, 1]
-    df["ML_PRED"] = (df["ML_PROB"] >= top_models[1]["threshold"]).astype(int)
-
-    print("Финальный отчёт для одной модели на всём геноме\n\n", classification_report(df["TRUE_VARIANT"], df["ML_PRED"]))
-   
-    out_tsv = f"{args.prefix}.variants.tsv"
-    df.to_csv(out_tsv, sep="\t", index=False)
-    print(f"Saved {out_tsv}")
-
-    # Save VCFs
     print(f"[8] VCF writing for ensemble")
 
     df_snv_sub = df[df.SVTYPE_NORM == "SNV"]
 
+
+
     write_vcf(df_snv_sub, args.vcfs, f"{args.prefix}.one_model.vcf", top_models[1]["threshold"], "ML_PROB")
 
-    top_models[1]["model"].save_model(f"model_{args.prefix}.cbm")
-
-    df = df_snv_sub
+    top_models[1]["model"].save_model("model_{args.prefix}.cbm")
 
     print(f"Model ensemble done.")
 
@@ -855,7 +698,7 @@ def main(args):
 
 
     # Confusion Matrix
-    cm = confusion_matrix(df["TRUE_VARIANT"], df["ML_PRED)"])
+    cm = confusion_matrix(df["TRUE_VARIANT"], df["ML_PRED_one)"])
     labels = ["Negative", "Positive"]
 
     plt.figure(figsize=(6, 5))
