@@ -11,6 +11,7 @@ process AUTO_POLISH {
         path draft
         path reads
         path readmers_meryl
+        val reads_type
 
     output:
         path "*.consensus.fasta", emit: polished
@@ -31,21 +32,56 @@ process AUTO_POLISH {
 
         echo "[Iteration \$i]"
 
-        meryl count \
-            k=15 \
-            output meryl_db \
-            \${CURRENT}
+        if [ "${reads_type}" = "hifi" ]; then
 
-        meryl print greater-than 100 meryl_db > repetitive_k15.txt
+            echo "[1] HiFi polishing"
 
-        winnowmap \
-            --MD \
-            -W repetitive_k15.txt \
-            -ax map-pb \
-            -t ${task.cpus} \
-            \${CURRENT} \
-            ${reads} \
-            > aln.sam
+            K=15
+
+            meryl count \
+                k=\${K} \
+                output meryl_db \
+                \${CURRENT}
+
+            meryl print greater-than 100 meryl_db > repetitive_k15.txt
+
+            winnowmap \
+                --MD \
+                -W repetitive_k15.txt \
+                -ax map-pb \
+                -t ${task.cpus} \
+                \${CURRENT} \
+                ${reads} \
+                > aln.sam
+
+        elif [ "${reads_type}" = "ont" ]; then
+
+            echo "[1] ONT polishing"
+
+            K=15
+
+            meryl count \
+                k=\${K} \
+                output meryl_db \
+                \${CURRENT}
+
+            meryl print greater-than 100 meryl_db > repetitive_k15.txt
+
+            winnowmap \
+                --MD \
+                -W repetitive_k15.txt \
+                -ax map-ont \
+                -t ${task.cpus} \
+                \${CURRENT} \
+                ${reads} \
+                > aln.sam
+
+        else
+
+            echo "ERROR: unknown reads type: ${reads_type}"
+            exit 1
+
+        fi
 
         samtools view \
             -h \
@@ -123,6 +159,8 @@ process AUTO_POLISH {
             -f \${CURRENT} \
             -H 1 \
             > iter_\${i}.consensus.fasta
+
+        CURRENT=iter_\${i}.consensus.fasta
 
     done
     """
