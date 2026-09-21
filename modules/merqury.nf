@@ -14,6 +14,7 @@ process MERQURY {
 
     output:
         path "merqury_regions.bed", emit: bed
+        path "**"
 
     script:
     """

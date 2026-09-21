@@ -16,6 +16,7 @@ process DEEPVARIANT {
     output:
         path "deepvariant.vcf.gz", emit: vcf
         path "deepvariant.vcf.gz.tbi"
+        path "**"
 
     script:
     """

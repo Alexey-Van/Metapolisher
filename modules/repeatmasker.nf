@@ -7,6 +7,7 @@ process REPEATMASKER {
 
     output:
     path "repeatmasker_output.gff3"
+    path "**"
 
     script:
     """

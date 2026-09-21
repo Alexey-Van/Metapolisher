@@ -9,6 +9,7 @@ process MERFIN {
     output:
     path "merfin_pass.vcf"
     path "kmer_scores.bed"
+    path "**"
 
     script:
     """

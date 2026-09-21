@@ -1,7 +1,7 @@
 nextflow.enable.dsl = 2
 
 include { CHECK        } from './modules/check_containers'
-include { ALIGN_ALL        } from './modules/align'
+include { ALIGN_HIFI ALIGN_ONT ALIGN_ILLUMINA } from './modules/align'
 include { DEEPVARIANT      } from './modules/deepvariant'
 include { PEPPER           } from './modules/pepper'
 include { ORIGINAL_T2T     } from './modules/original_t2t'
@@ -25,13 +25,11 @@ workflow {
     illumina_r1 = Channel.fromPath(params.illumina_r1)
     illumina_r2 = Channel.fromPath(params.illumina_r2)
 
-    align = ALIGN_ALL(
-        ready,
-        draft,
-        hifi,
-        ont,
-        illumina_r1,
-        illumina_r2
+    align_illumina = ALIGN_ILLUMINA( 
+        ready, 
+        draft, 
+        illumina_r1, 
+        illumina_r2 
     )
 
     deepvariant = DEEPVARIANT(

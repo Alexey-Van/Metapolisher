@@ -659,7 +659,7 @@ def main(args):
     # 2. Делим на train и temp (val+test), сохраняя пропорции классов
     train_df, temp = train_test_split(
         df_shuffled,
-        test_size=0.3,            # 30% уйдёт на val+test
+        test_size=0.7,            # 30% уйдёт на val+test
         stratify=df_shuffled["TRUE_VARIANT"],
         random_state=42
     )

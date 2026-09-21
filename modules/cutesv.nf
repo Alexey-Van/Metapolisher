@@ -15,6 +15,7 @@ process CUTESV {
 
     output:
         path "cutesv_${label}.vcf", emit: vcf
+        path "**"
 
     script:
     """

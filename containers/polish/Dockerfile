@@ -34,6 +34,7 @@ RUN micromamba create -y -n polish \
     samtools \
     winnowmap \
     racon \
+    medaka \
     && micromamba clean -a -y
 
 ENV PATH=/opt/conda/envs/polish/bin:$PATH

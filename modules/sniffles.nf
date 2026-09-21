@@ -15,6 +15,7 @@ process SNIFFLES {
 
     output:
         path "sniffles_${label}.vcf", emit: vcf
+        path "**"
 
     script:
     """

@@ -13,6 +13,7 @@ process FLAGGER {
 
     output:
         path "hmm_flagger_outputs", emit: bed
+        path "**"
 
     script:
     """

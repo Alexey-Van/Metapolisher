@@ -47,4 +47,3 @@ echo "Результаты:"
 echo "  ragtag_scaffold/ragtag.scaffold.fasta   — итоговые хромосомы"
 echo "  ragtag_scaffold/ragtag.scaffold.agp     — порядок и ориентация"
 echo "  ragtag_scaffold/ragtag.scaffold.paf     — выравнивания"
-echo

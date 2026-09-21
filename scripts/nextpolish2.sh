@@ -37,7 +37,7 @@ echo "[NP2] Yak files: ${YAKS[*]}" | tee -a $LOG
 
 # 2) HiFi → assembly выравнивание
 echo "[NP2] Mapping HiFi to assembly" | tee -a $LOG
-minimap2 -t $THREADS -x map-hifi $ASM $HIFI \
+minimap2 -t $THREADS -x map-pb $ASM $HIFI \
   | samtools sort -@ $THREADS -o ${PREFIX}.hifi.bam 2>>$LOG
 samtools index ${PREFIX}.hifi.bam
 

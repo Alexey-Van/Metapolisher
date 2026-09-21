@@ -8,6 +8,7 @@ process PARLIAMENT2 {
 
     output:
     path "*.vcf"
+    path "**"
 
     script:
     """

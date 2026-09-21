@@ -15,6 +15,7 @@ process PEPPER {
 
     output:
         path "pepper_out/*.vcf.gz", emit: vcf
+        path "**"
 
     script:
     """

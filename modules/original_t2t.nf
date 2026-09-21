@@ -18,6 +18,7 @@ process ORIGINAL_T2T {
     output:
         path "merfin_results*.vcf", emit: vcf
         path "*.combined_readmers.meryl", emit: readmers_meryl
+        path "**"
         // path "merfin_results.fa", emit: fa
 
     script:

@@ -14,6 +14,7 @@ process AUTO_POLISH {
 
     output:
         path "*.consensus.fasta", emit: polished
+        path "**"
 
     script:
     """

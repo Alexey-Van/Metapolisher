@@ -16,6 +16,7 @@ process NP2 {
     output:
         path "np2.vcf", emit: vcf
         path "np2.polished.fa", emit: fa
+        path "**"
 
     script:
     """
