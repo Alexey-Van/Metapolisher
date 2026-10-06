@@ -3,7 +3,7 @@ nextflow.enable.dsl = 2
 include { CHECK        } from './modules/check_containers'
 include { ALIGN_HIFI } from './modules/align'
 include { ALIGN_ONT }  from './modules/align'
-include { ALIGN_ILLUMINA } from './modules/align'
+include { ALIGN_WGS } from './modules/align'
 include { DEEPVARIANT      } from './modules/deepvariant'
 include { PEPPER           } from './modules/pepper'
 include { ORIGINAL_T2T     } from './modules/original_t2t'
@@ -16,21 +16,73 @@ include { CUTESV as CUTESV_HIFI      } from './modules/cutesv'
 include { FLAGGER          } from './modules/flagger'
 include { MERQURY          } from './modules/merqury'
 include { MEDAKA           } from './modules/medaka'
+include { MERGE_READS } from './modules/merge_reads'
 
 workflow {
     ready       = CHECK()
     draft       = Channel.fromPath(params.draft)
     draft_fai = Channel.fromPath(params.draft+".fai")
-    ont         = Channel.fromPath(params.ont)
 
-    illumina_r1 = Channel.fromPath(params.illumina_r1)
-    illumina_r2 = Channel.fromPath(params.illumina_r2)
+    ont_files = Channel.fromPath(
+        "${params.ont}/**/*.fq.gz",
+        checkIfExists: true
+    )
 
-    align_illumina = ALIGN_ILLUMINA( 
+    ont = ont_files
+        .collect()
+        .map { files -> tuple("ont", files) }
+
+    ont = MERGE_READS(ont)
+
+    
+    wgs_r1_files = Channel.empty()
+    wgs_r2_files = Channel.empty()
+
+    if (params.illumina) {
+
+        wgs_r1_files = Channel.fromPath(
+            "${params.illumina}/**/*1.fq.gz",
+            checkIfExists: true
+        )
+
+        wgs_r2_files = Channel.fromPath(
+            "${params.illumina}/**/*2.fq.gz",
+            checkIfExists: true
+        )
+
+    } else if (params.mgi) {
+
+        wgs_r1_files = Channel.fromPath(
+            "${params.mgi}/**/*1.fq.gz",
+            checkIfExists: true
+        )
+
+        wgs_r2_files = Channel.fromPath(
+            "${params.mgi}/**/*2.fq.gz",
+            checkIfExists: true
+        )
+
+    } else {
+
+        error "ERROR: Provide --illumina or --mgi"
+    }
+
+    wgs_r1 = wgs_r1_files
+        .collect()
+        .map { files -> tuple("wgs_R1", files) }
+
+    wgs_r2 = wgs_r2_files
+        .collect()
+        .map { files -> tuple("wgs_R2", files) }
+
+    wgs_r1 = MERGE_READS(wgs_r1)
+    wgs_r2 = MERGE_READS(wgs_r2)
+
+    align_illumina = ALIGN_WGS( 
         ready, 
         draft, 
-        illumina_r1, 
-        illumina_r2 
+        wgs_r1, 
+        wgs_r2 
     )
 
     align_ont = ALIGN_ONT( 
@@ -41,10 +93,16 @@ workflow {
 
     if (params.hifi) {
         
-        hifi = Channel.fromPath( 
-            params.hifi, 
-            checkIfExists: true 
+        hifi_files = Channel.fromPath(
+            "${params.hifi}/**/*.fq.gz",
+            checkIfExists: true
         )
+
+        hifi = hifi_files
+            .collect()
+            .map { files -> tuple("hifi", files) }
+
+        hifi = MERGE_READS(hifi)
 
         align_hifi = ALIGN_HIFI( 
             ready, 
@@ -74,8 +132,8 @@ workflow {
             deepvariant.vcf,
             pepper.vcf,
             draft,
-            illumina_r1,
-            illumina_r2,
+            wgs_r1,
+            wgs_r2,
             hifi
         )
 
@@ -97,8 +155,8 @@ workflow {
             ready,
             draft,
             align_hifi.bam,
-            illumina_r1,
-            illumina_r2
+            wgs_r1,
+            wgs_r2
         )
 
         sniffles_ont = SNIFFLES_ONT(
@@ -112,7 +170,7 @@ workflow {
         sniffles_hifi = SNIFFLES_HIFI(
             ready,
             draft,
-            align_hifi.bai,
+            align_hifi.bam,
             align_hifi.bai,
             "hifi"
         )
@@ -136,14 +194,14 @@ workflow {
         flagger = FLAGGER(
             ready,
             draft,
-            align_hifi.bai
+            align_hifi.bam
         )
 
         merqury = MERQURY(
             ready,
             draft,
-            illumina_r1,
-            illumina_r2
+            wgs_r1,
+            wgs_r2
         )
 
     } else {
@@ -175,8 +233,8 @@ workflow {
             ready,
             draft,
             align_ont.bam,
-            illumina_r1,
-            illumina_r2
+            wgs_r1,
+            wgs_r2
         )
 
         sniffles_ont = SNIFFLES_ONT(
@@ -204,8 +262,8 @@ workflow {
         merqury = MERQURY(
             ready,
             draft,
-            illumina_r1,
-            illumina_r2
+            wgs_r1,
+            wgs_r2
         )
 
         t2t = ORIGINAL_T2T(
@@ -213,8 +271,8 @@ workflow {
             deepvariant.vcf,
             pepper.vcf,
             draft,
-            illumina_r1,
-            illumina_r2,
+            wgs_r1,
+            wgs_r2,
             params.hifi ?: "none"
         )
 

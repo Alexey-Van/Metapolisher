@@ -88,13 +88,13 @@ process ALIGN_ONT {
     """
 }
 
-process ALIGN_ILLUMINA {
+process ALIGN_WGS {
 
-    tag "align_illumina"
+    tag "align_wgs"
 
     container params.mapping_container
 
-    publishDir "${params.outdir}/align/illumina", mode: 'copy'
+    publishDir "${params.outdir}/align/wgs", mode: 'copy'
 
     input:
         val ready
@@ -103,8 +103,8 @@ process ALIGN_ILLUMINA {
         path r2
 
     output:
-        path "illumina.sorted.bam", emit: bam
-        path "illumina.sorted.bam.bai", emit: bai
+        path "wgs.sorted.bam", emit: bam
+        path "wgs.sorted.bam.bai", emit: bai
 
     script:
     """
@@ -117,14 +117,14 @@ process ALIGN_ILLUMINA {
         ${draft} \
         ${r1} \
         ${r2} \
-        > illumina.sam
+        > wgs.sam
 
     samtools sort \
         -@ ${task.cpus} \
-        -o illumina.sorted.bam \
-        illumina.sam
+        -o wgs.sorted.bam \
+        wgs.sam
 
-    samtools index illumina.sorted.bam
+    samtools index wgs.sorted.bam
     """
 }
 
