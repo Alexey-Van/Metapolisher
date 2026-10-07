@@ -4,7 +4,7 @@ process ALIGN_HIFI {
 
     container params.mapping_container
 
-    publishDir "${params.outdir}/align/hifi", mode: 'copy'
+    publishDir "${params.outdir}/align/hifi/${draft.baseName}", mode: 'copy'
 
     input:
         val ready
@@ -41,13 +41,14 @@ process ALIGN_HIFI {
     """
 }
 
+
 process ALIGN_ONT {
 
     tag "align_ont"
 
     container params.mapping_container
 
-    publishDir "${params.outdir}/align/ont", mode: 'copy'
+    publishDir "${params.outdir}/align/ont/${draft.baseName}", mode: 'copy'
 
     input:
         val ready
@@ -62,7 +63,7 @@ process ALIGN_ONT {
     """
     set -euo pipefail
 
-    meryl count k=15 ${draft} output meryl_db 
+    meryl count k=15 ${draft} output meryl_db
 
     meryl print greater-than 100 meryl_db > repetitive_k15.txt
 
@@ -88,13 +89,14 @@ process ALIGN_ONT {
     """
 }
 
+
 process ALIGN_WGS {
 
     tag "align_wgs"
 
     container params.mapping_container
 
-    publishDir "${params.outdir}/align/wgs", mode: 'copy'
+    publishDir "${params.outdir}/align/wgs/${draft.baseName}", mode: 'copy'
 
     input:
         val ready
@@ -126,38 +128,4 @@ process ALIGN_WGS {
 
     samtools index wgs.sorted.bam
     """
-}
-
-workflow ALIGN_ALL {
-
-    take:
-        ready
-        draft
-        hifi
-        ont
-        illumina_r1
-        illumina_r2
-
-    main:
-
-        hifi_align = ALIGN_HIFI(ready, draft, hifi)
-
-        ont_align = ALIGN_ONT(ready, draft, ont)
-
-        illumina_align = ALIGN_ILLUMINA(
-            ready,
-            draft,
-            illumina_r1,
-            illumina_r2
-        )
-
-    emit:
-        hifi_bam     = hifi_align.bam
-        hifi_bai     = hifi_align.bai
-
-        ont_bam      = ont_align.bam
-        ont_bai      = ont_align.bai
-
-        illumina_bam = illumina_align.bam
-        illumina_bai = illumina_align.bai
 }
