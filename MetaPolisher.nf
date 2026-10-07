@@ -16,7 +16,8 @@ include { CUTESV as CUTESV_HIFI } from './modules/cutesv'
 include { FLAGGER      } from './modules/flagger'
 include { MERQURY     } from './modules/merqury'
 include { MEDAKA      } from './modules/medaka'
-include { MERGE_READS } from './modules/merge_reads'
+include { MERGE_READS as MERGE_READS_HAP1 } from './modules/merge_reads'
+include { MERGE_READS as MERGE_READS_HAP2 } from './modules/merge_reads'
 include { HAPLOTYPE_READS_HIFI } from './modules/haplotype_reads'
 include { HAPLOTYPE_READS_ONT  } from './modules/haplotype_reads'
 include { HAPLOTYPE_READS_WGS  } from './modules/haplotype_reads'
@@ -78,8 +79,8 @@ workflow {
         tuple("wgs_R2", files)
     }
 
-    wgs_r1 = MERGE_READS(wgs_r1)
-    wgs_r2 = MERGE_READS(wgs_r2)
+    wgs_r1 = MERGE_READS_HAP1(wgs_r1)
+    wgs_r2 = MERGE_READS_HAP2(wgs_r2)
 
 
     // -----------------------------------------------------------------------

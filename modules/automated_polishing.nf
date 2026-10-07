@@ -132,7 +132,7 @@ process AUTO_POLISH {
         BEGIN { OFS="\t" }
         /^#/ { print; next }
         {
-            key = $1 FS $2
+            key = \$1 FS \$2
             if (!(key in seen)) {
                 seen[key] = 1
                 print
