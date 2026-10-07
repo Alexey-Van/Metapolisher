@@ -1,6 +1,10 @@
 nextflow.enable.dsl = 2
 
 include { CHECK        } from './modules/check_containers'
+
+// ---------------------------------------------------------------------------
+// Haploid / общие имена (каждый процесс вызывается максимум один раз)
+// ---------------------------------------------------------------------------
 include { ALIGN_HIFI  } from './modules/align'
 include { ALIGN_ONT   } from './modules/align'
 include { ALIGN_WGS   } from './modules/align'
@@ -16,6 +20,50 @@ include { CUTESV as CUTESV_HIFI } from './modules/cutesv'
 include { FLAGGER      } from './modules/flagger'
 include { MERQURY     } from './modules/merqury'
 include { MEDAKA      } from './modules/medaka'
+
+// ---------------------------------------------------------------------------
+// Diploid: отдельный алиас на каждый haplotype (H1 / H2)
+// ---------------------------------------------------------------------------
+include { ALIGN_HIFI as ALIGN_HIFI_H1 } from './modules/align'
+include { ALIGN_HIFI as ALIGN_HIFI_H2 } from './modules/align'
+include { ALIGN_ONT  as ALIGN_ONT_H1  } from './modules/align'
+include { ALIGN_ONT  as ALIGN_ONT_H2  } from './modules/align'
+include { ALIGN_WGS  as ALIGN_WGS_H1  } from './modules/align'
+include { ALIGN_WGS  as ALIGN_WGS_H2  } from './modules/align'
+
+include { DEEPVARIANT as DEEPVARIANT_H1 } from './modules/deepvariant'
+include { DEEPVARIANT as DEEPVARIANT_H2 } from './modules/deepvariant'
+
+include { PEPPER as PEPPER_H1 } from './modules/pepper'
+include { PEPPER as PEPPER_H2 } from './modules/pepper'
+
+include { ORIGINAL_T2T as ORIGINAL_T2T_H1 } from './modules/original_t2t'
+include { ORIGINAL_T2T as ORIGINAL_T2T_H2 } from './modules/original_t2t'
+
+include { AUTO_POLISH as AUTO_POLISH_H1 } from './modules/automated_polishing'
+include { AUTO_POLISH as AUTO_POLISH_H2 } from './modules/automated_polishing'
+
+include { NP2 as NP2_H1 } from './modules/nextpolish2'
+include { NP2 as NP2_H2 } from './modules/nextpolish2'
+
+include { SNIFFLES as SNIFFLES_HIFI_H1 } from './modules/sniffles'
+include { SNIFFLES as SNIFFLES_HIFI_H2 } from './modules/sniffles'
+include { SNIFFLES as SNIFFLES_ONT_H1  } from './modules/sniffles'
+include { SNIFFLES as SNIFFLES_ONT_H2  } from './modules/sniffles'
+
+include { CUTESV as CUTESV_HIFI_H1 } from './modules/cutesv'
+include { CUTESV as CUTESV_HIFI_H2 } from './modules/cutesv'
+include { CUTESV as CUTESV_ONT_H1  } from './modules/cutesv'
+include { CUTESV as CUTESV_ONT_H2  } from './modules/cutesv'
+
+include { FLAGGER as FLAGGER_H1 } from './modules/flagger'
+include { FLAGGER as FLAGGER_H2 } from './modules/flagger'
+
+include { MERQURY as MERQURY_H1 } from './modules/merqury'
+include { MERQURY as MERQURY_H2 } from './modules/merqury'
+
+include { MEDAKA as MEDAKA_H1 } from './modules/medaka'
+include { MEDAKA as MEDAKA_H2 } from './modules/medaka'
 include { MERGE_READS as MERGE_READS_HAP1 } from './modules/merge_reads'
 include { MERGE_READS as MERGE_READS_HAP2 } from './modules/merge_reads'
 include { HAPLOTYPE_READS_HIFI } from './modules/haplotype_reads'
@@ -63,10 +111,6 @@ workflow {
 
         error "ERROR: Provide --illumina or --mgi"
     }
-
-
-    // Сохраняем исходные списки для haplotype classifier.
-    // MERGE_READS продолжает использоваться для обычной ветки.
 
     wgs_r1_raw = wgs_r1_files.collect()
     wgs_r2_raw = wgs_r2_files.collect()
@@ -171,21 +215,14 @@ workflow {
             wgs_r2_raw
         )
 
-        wgs_hap1 = HAPLOTYPE_READS_WGS.out.hap1.map { item ->
-            [
-                name: item[0],
-                r1: item[1],
-                r2: item[2]
-            ]
-        }
+        // ИСПРАВЛЕНО: раньше было wgs_hap1.r1 на канале (так нельзя) —
+        // теперь отдельные каналы R1 / R2 для каждого haplotype.
 
-        wgs_hap2 = HAPLOTYPE_READS_WGS.out.hap2.map { item ->
-            [
-                name: item[0],
-                r1: item[1],
-                r2: item[2]
-            ]
-        }
+        wgs_hap1_r1 = HAPLOTYPE_READS_WGS.out.hap1.map { it[1] }
+        wgs_hap1_r2 = HAPLOTYPE_READS_WGS.out.hap1.map { it[2] }
+
+        wgs_hap2_r1 = HAPLOTYPE_READS_WGS.out.hap2.map { it[1] }
+        wgs_hap2_r2 = HAPLOTYPE_READS_WGS.out.hap2.map { it[2] }
 
 
         // -------------------------------------------------------------------
@@ -194,7 +231,7 @@ workflow {
 
         if (params.hifi) {
 
-            align_hifi_hap1 = ALIGN_HIFI(
+            align_hifi_hap1 = ALIGN_HIFI_H1(
                 ready,
                 hap1,
                 hifi_hap1
@@ -203,18 +240,18 @@ workflow {
 
         if (params.ont) {
 
-            align_ont_hap1 = ALIGN_ONT(
+            align_ont_hap1 = ALIGN_ONT_H1(
                 ready,
                 hap1,
                 ont_hap1
             )
         }
 
-        align_wgs_hap1 = ALIGN_WGS(
+        align_wgs_hap1 = ALIGN_WGS_H1(
             ready,
             hap1,
-            wgs_hap1.r1,
-            wgs_hap1.r2
+            wgs_hap1_r1,
+            wgs_hap1_r2
         )
 
 
@@ -224,7 +261,7 @@ workflow {
 
         if (params.hifi) {
 
-            align_hifi_hap2 = ALIGN_HIFI(
+            align_hifi_hap2 = ALIGN_HIFI_H2(
                 ready,
                 hap2,
                 hifi_hap2
@@ -233,18 +270,18 @@ workflow {
 
         if (params.ont) {
 
-            align_ont_hap2 = ALIGN_ONT(
+            align_ont_hap2 = ALIGN_ONT_H2(
                 ready,
                 hap2,
                 ont_hap2
             )
         }
 
-        align_wgs_hap2 = ALIGN_WGS(
+        align_wgs_hap2 = ALIGN_WGS_H2(
             ready,
             hap2,
-            wgs_hap2.r1,
-            wgs_hap2.r2
+            wgs_hap2_r1,
+            wgs_hap2_r2
         )
 
 
@@ -256,7 +293,7 @@ workflow {
 
         if (params.hifi) {
 
-            deepvariant_hap1 = DEEPVARIANT(
+            deepvariant_hap1 = DEEPVARIANT_H1(
                 ready,
                 hap1,
                 hap1_fai,
@@ -265,7 +302,7 @@ workflow {
                 align_hifi_hap1.bam
             )
 
-            deepvariant_hap2 = DEEPVARIANT(
+            deepvariant_hap2 = DEEPVARIANT_H2(
                 ready,
                 hap2,
                 hap2_fai,
@@ -276,7 +313,7 @@ workflow {
 
         } else {
 
-            deepvariant_hap1 = DEEPVARIANT(
+            deepvariant_hap1 = DEEPVARIANT_H1(
                 ready,
                 hap1,
                 hap1_fai,
@@ -285,7 +322,7 @@ workflow {
                 "none"
             )
 
-            deepvariant_hap2 = DEEPVARIANT(
+            deepvariant_hap2 = DEEPVARIANT_H2(
                 ready,
                 hap2,
                 hap2_fai,
@@ -304,7 +341,7 @@ workflow {
 
         if (params.ont) {
 
-            pepper_hap1 = PEPPER(
+            pepper_hap1 = PEPPER_H1(
                 ready,
                 align_ont_hap1.bam,
                 align_ont_hap1.bai,
@@ -312,7 +349,7 @@ workflow {
                 hap1_fai
             )
 
-            pepper_hap2 = PEPPER(
+            pepper_hap2 = PEPPER_H2(
                 ready,
                 align_ont_hap2.bam,
                 align_ont_hap2.bai,
@@ -328,45 +365,45 @@ workflow {
 
         if (params.ont) {
 
-            original_t2t_hap1 = ORIGINAL_T2T(
+            original_t2t_hap1 = ORIGINAL_T2T_H1(
                 ready,
                 deepvariant_hap1.vcf,
                 pepper_hap1.vcf,
                 hap1,
-                wgs_hap1.r1,
-                wgs_hap1.r2,
+                wgs_hap1_r1,
+                wgs_hap1_r2,
                 params.hifi ? hifi_hap1 : "none"
             )
 
-            original_t2t_hap2 = ORIGINAL_T2T(
+            original_t2t_hap2 = ORIGINAL_T2T_H2(
                 ready,
                 deepvariant_hap2.vcf,
                 pepper_hap2.vcf,
                 hap2,
-                wgs_hap2.r1,
-                wgs_hap2.r2,
+                wgs_hap2_r1,
+                wgs_hap2_r2,
                 params.hifi ? hifi_hap2 : "none"
             )
 
         } else {
 
-            original_t2t_hap1 = ORIGINAL_T2T(
+            original_t2t_hap1 = ORIGINAL_T2T_H1(
                 ready,
                 deepvariant_hap1.vcf,
                 "none",
                 hap1,
-                wgs_hap1.r1,
-                wgs_hap1.r2,
+                wgs_hap1_r1,
+                wgs_hap1_r2,
                 params.hifi ? hifi_hap1 : "none"
             )
 
-            original_t2t_hap2 = ORIGINAL_T2T(
+            original_t2t_hap2 = ORIGINAL_T2T_H2(
                 ready,
                 deepvariant_hap2.vcf,
                 "none",
                 hap2,
-                wgs_hap2.r1,
-                wgs_hap2.r2,
+                wgs_hap2_r1,
+                wgs_hap2_r2,
                 params.hifi ? hifi_hap2 : "none"
             )
         }
@@ -378,7 +415,7 @@ workflow {
 
         if (params.hifi) {
 
-            auto_polish_hap1 = AUTO_POLISH(
+            auto_polish_hap1 = AUTO_POLISH_H1(
                 ready,
                 hap1,
                 hifi_hap1,
@@ -386,7 +423,7 @@ workflow {
                 "hifi"
             )
 
-            auto_polish_hap2 = AUTO_POLISH(
+            auto_polish_hap2 = AUTO_POLISH_H2(
                 ready,
                 hap2,
                 hifi_hap2,
@@ -396,7 +433,7 @@ workflow {
 
         } else if (params.ont) {
 
-            auto_polish_hap1 = AUTO_POLISH(
+            auto_polish_hap1 = AUTO_POLISH_H1(
                 ready,
                 hap1,
                 ont_hap1,
@@ -404,7 +441,7 @@ workflow {
                 "ont"
             )
 
-            auto_polish_hap2 = AUTO_POLISH(
+            auto_polish_hap2 = AUTO_POLISH_H2(
                 ready,
                 hap2,
                 ont_hap2,
@@ -424,38 +461,38 @@ workflow {
 
         if (params.hifi) {
 
-            np2_hap1 = NP2(
+            np2_hap1 = NP2_H1(
                 ready,
                 hap1,
                 align_hifi_hap1.bam,
-                wgs_hap1.r1,
-                wgs_hap1.r2
+                wgs_hap1_r1,
+                wgs_hap1_r2
             )
 
-            np2_hap2 = NP2(
+            np2_hap2 = NP2_H2(
                 ready,
                 hap2,
                 align_hifi_hap2.bam,
-                wgs_hap2.r1,
-                wgs_hap2.r2
+                wgs_hap2_r1,
+                wgs_hap2_r2
             )
 
         } else {
 
-            np2_hap1 = NP2(
+            np2_hap1 = NP2_H1(
                 ready,
                 hap1,
                 align_ont_hap1.bam,
-                wgs_hap1.r1,
-                wgs_hap1.r2
+                wgs_hap1_r1,
+                wgs_hap1_r2
             )
 
-            np2_hap2 = NP2(
+            np2_hap2 = NP2_H2(
                 ready,
                 hap2,
                 align_ont_hap2.bam,
-                wgs_hap2.r1,
-                wgs_hap2.r2
+                wgs_hap2_r1,
+                wgs_hap2_r2
             )
         }
 
@@ -466,7 +503,7 @@ workflow {
 
         if (params.hifi) {
 
-            sniffles_hap1 = SNIFFLES_HIFI(
+            sniffles_hap1 = SNIFFLES_HIFI_H1(
                 ready,
                 hap1,
                 align_hifi_hap1.bam,
@@ -474,7 +511,7 @@ workflow {
                 "hifi"
             )
 
-            sniffles_hap2 = SNIFFLES_HIFI(
+            sniffles_hap2 = SNIFFLES_HIFI_H2(
                 ready,
                 hap2,
                 align_hifi_hap2.bam,
@@ -484,7 +521,7 @@ workflow {
 
         } else {
 
-            sniffles_hap1 = SNIFFLES_ONT(
+            sniffles_hap1 = SNIFFLES_ONT_H1(
                 ready,
                 hap1,
                 align_ont_hap1.bam,
@@ -492,7 +529,7 @@ workflow {
                 "ont"
             )
 
-            sniffles_hap2 = SNIFFLES_ONT(
+            sniffles_hap2 = SNIFFLES_ONT_H2(
                 ready,
                 hap2,
                 align_ont_hap2.bam,
@@ -508,7 +545,7 @@ workflow {
 
         if (params.hifi) {
 
-            cutesv_hap1 = CUTESV_HIFI(
+            cutesv_hap1 = CUTESV_HIFI_H1(
                 ready,
                 hap1,
                 align_hifi_hap1.bam,
@@ -516,7 +553,7 @@ workflow {
                 "hifi"
             )
 
-            cutesv_hap2 = CUTESV_HIFI(
+            cutesv_hap2 = CUTESV_HIFI_H2(
                 ready,
                 hap2,
                 align_hifi_hap2.bam,
@@ -526,7 +563,7 @@ workflow {
 
         } else {
 
-            cutesv_hap1 = CUTESV_ONT(
+            cutesv_hap1 = CUTESV_ONT_H1(
                 ready,
                 hap1,
                 align_ont_hap1.bam,
@@ -534,7 +571,7 @@ workflow {
                 "ont"
             )
 
-            cutesv_hap2 = CUTESV_ONT(
+            cutesv_hap2 = CUTESV_ONT_H2(
                 ready,
                 hap2,
                 align_ont_hap2.bam,
@@ -553,13 +590,13 @@ workflow {
 
         if (params.hifi) {
 
-            flagger_hap1 = FLAGGER(
+            flagger_hap1 = FLAGGER_H1(
                 ready,
                 hap1,
                 align_hifi_hap1.bam
             )
 
-            flagger_hap2 = FLAGGER(
+            flagger_hap2 = FLAGGER_H2(
                 ready,
                 hap2,
                 align_hifi_hap2.bam
@@ -567,13 +604,13 @@ workflow {
 
         } else {
 
-            flagger_hap1 = FLAGGER(
+            flagger_hap1 = FLAGGER_H1(
                 ready,
                 hap1,
                 align_ont_hap1.bam
             )
 
-            flagger_hap2 = FLAGGER(
+            flagger_hap2 = FLAGGER_H2(
                 ready,
                 hap2,
                 align_ont_hap2.bam
@@ -585,18 +622,18 @@ workflow {
         // Merqury
         // -------------------------------------------------------------------
 
-        merqury_hap1 = MERQURY(
+        merqury_hap1 = MERQURY_H1(
             ready,
             hap1,
-            wgs_hap1.r1,
-            wgs_hap1.r2
+            wgs_hap1_r1,
+            wgs_hap1_r2
         )
 
-        merqury_hap2 = MERQURY(
+        merqury_hap2 = MERQURY_H2(
             ready,
             hap2,
-            wgs_hap2.r1,
-            wgs_hap2.r2
+            wgs_hap2_r1,
+            wgs_hap2_r2
         )
 
 
@@ -608,13 +645,13 @@ workflow {
 
         if (params.ont) {
 
-            medaka_hap1 = MEDAKA(
+            medaka_hap1 = MEDAKA_H1(
                 ready,
                 hap1,
                 ont_hap1
             )
 
-            medaka_hap2 = MEDAKA(
+            medaka_hap2 = MEDAKA_H2(
                 ready,
                 hap2,
                 ont_hap2
@@ -626,7 +663,7 @@ workflow {
 
 
         // ===================================================================
-        // HAPLOID — оригинальная ветка
+        // HAPLOID — оригинальная ветка (без изменений)
         // ===================================================================
 
         draft = Channel.value(
