@@ -64,12 +64,28 @@ include { MERQURY as MERQURY_H2 } from './modules/merqury'
 
 include { MEDAKA as MEDAKA_H1 } from './modules/medaka'
 include { MEDAKA as MEDAKA_H2 } from './modules/medaka'
+
+// ---------------------------------------------------------------------------
+// Уже раздельные процессы
+// ---------------------------------------------------------------------------
 include { MERGE_READS as MERGE_READS_HAP1 } from './modules/merge_reads'
 include { MERGE_READS as MERGE_READS_HAP2 } from './modules/merge_reads'
 include { HAPLOTYPE_READS_HIFI } from './modules/haplotype_reads'
 include { HAPLOTYPE_READS_ONT  } from './modules/haplotype_reads'
 include { HAPLOTYPE_READS_WGS  } from './modules/haplotype_reads'
 
+
+// Принимает файл, glob или ДИРЕКТОРИЮ с ридами и возвращает канал файлов.
+def reads_channel(p) {
+    def f = file(p)
+    if (f.isDirectory()) {
+        return Channel.fromPath(
+            "${f}/**/*.{fastq,fq,fastq.gz,fq.gz}",
+            checkIfExists: true
+        )
+    }
+    return Channel.fromPath(p, checkIfExists: true)
+}
 
 workflow {
 
@@ -111,6 +127,10 @@ workflow {
 
         error "ERROR: Provide --illumina or --mgi"
     }
+
+
+    // Сохраняем исходные списки для haplotype classifier.
+    // MERGE_READS продолжает использоваться для обычной ветки.
 
     wgs_r1_raw = wgs_r1_files.collect()
     wgs_r2_raw = wgs_r2_files.collect()
@@ -172,9 +192,7 @@ workflow {
 
         if (params.hifi) {
 
-            hifi_reads = Channel
-                .fromPath(params.hifi, checkIfExists: true)
-                .collect()
+            hifi_reads = reads_channel(params.hifi).collect()
 
             HAPLOTYPE_READS_HIFI(
                 hap1,
@@ -191,9 +209,7 @@ workflow {
 
         if (params.ont) {
 
-            ont_reads = Channel
-                .fromPath(params.ont, checkIfExists: true)
-                .collect()
+            ont_reads = reads_channel(params.ont).collect()
 
             HAPLOTYPE_READS_ONT(
                 hap1,
@@ -674,6 +690,9 @@ workflow {
             file("${params.draft}.fai", checkIfExists: true)
         )
 
+        if (params.hifi) { hifi_reads = reads_channel(params.hifi).collect() }
+        if (params.ont)  { ont_reads  = reads_channel(params.ont).collect()  }
+
 
         // -------------------------------------------------------------------
         // Alignments
@@ -684,7 +703,7 @@ workflow {
             align_hifi = ALIGN_HIFI(
                 ready,
                 draft,
-                params.hifi
+                hifi_reads
             )
         }
 
@@ -693,7 +712,7 @@ workflow {
             align_ont = ALIGN_ONT(
                 ready,
                 draft,
-                params.ont
+                ont_reads
             )
         }
 
@@ -762,7 +781,7 @@ workflow {
                 draft,
                 wgs_r1,
                 wgs_r2,
-                params.hifi ? params.hifi : "none"
+                params.hifi ? hifi_reads : "none"
             )
 
         } else {
@@ -774,7 +793,7 @@ workflow {
                 draft,
                 wgs_r1,
                 wgs_r2,
-                params.hifi ? params.hifi : "none"
+                params.hifi ? hifi_reads : "none"
             )
         }
 
@@ -788,7 +807,7 @@ workflow {
             auto_polish = AUTO_POLISH(
                 ready,
                 draft,
-                params.hifi,
+                hifi_reads,
                 original_t2t.readmers_meryl,
                 "hifi"
             )
@@ -798,7 +817,7 @@ workflow {
             auto_polish = AUTO_POLISH(
                 ready,
                 draft,
-                params.ont,
+                ont_reads,
                 original_t2t.readmers_meryl,
                 "ont"
             )
@@ -926,7 +945,7 @@ workflow {
             medaka = MEDAKA(
                 ready,
                 draft,
-                params.ont
+                ont_reads
             )
         }
     }
