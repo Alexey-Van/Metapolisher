@@ -25,20 +25,35 @@ process HAPLOTYPE_READS_HIFI {
 
     cat ${read_args} > haplotype/hifi/hifi_reads.fastq.gz
 
-    minimap2 \
-        -t ${task.cpus} \
-        -ax map-hifi \
-        --secondary=no \
-        ${hap1} \
-        haplotype/hifi/hifi_reads.fastq.gz \
-        | samtools sort -n -@ ${task.cpus} -o haplotype/hifi/hifi_hap1.bam - \
-    & minimap2 \
-        -t ${task.cpus} \
-        -ax map-hifi \
-        --secondary=no \
-        ${hap2} \
-        haplotype/hifi/hifi_reads.fastq.gz \
-        | samtools sort -n -@ ${task.cpus} -o haplotype/hifi/hifi_hap2.bam -
+    (
+        minimap2 \
+            -t ${task.cpus.intdiv(2)} \
+            -ax map-hifi \
+            --secondary=no \
+            ${hap1} \
+            haplotype/hifi/hifi_reads.fastq.gz \
+        | samtools sort -n -@ 1 -o haplotype/hifi/hifi_hap1.bam -
+    ) &
+    pid1=$!
+
+    (
+        minimap2 \
+            -t ${task.cpus.intdiv(2)} \
+            -ax map-hifi \
+            --secondary=no \
+            ${hap2} \
+            haplotype/hifi/hifi_reads.fastq.gz \
+        | samtools sort -n -@ 1 -o haplotype/hifi/hifi_hap2.bam -
+    ) &
+    pid2=$!
+
+    status=0
+    wait "$pid1" || status=$?
+    wait "$pid2" || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "ERROR: HiFi alignment failed" >&2
+        exit "$status"
+    fi
 
     python3 ${classifier} \
         --bam1 haplotype/hifi/hifi_hap1.bam \
@@ -46,7 +61,9 @@ process HAPLOTYPE_READS_HIFI {
         --reads haplotype/hifi/hifi_reads.fastq.gz \
         --out-prefix haplotype/hifi/hifi \
         --min-mapq ${params.haplotype_min_mapq} \
-        --min-diff 5
+        --min-diff 5 \
+        --gzip
+
 
     zcat haplotype/hifi/hifi.hap1.fastq.gz haplotype/hifi/hifi.shared.fastq.gz \
         | gzip -c > haplotype/hifi/hifi.hap1.fastq.gz
@@ -84,20 +101,35 @@ process HAPLOTYPE_READS_ONT {
 
     cat ${read_args} > haplotype/ont/ont_reads.fastq.gz
 
-    minimap2 \
-        -t ${task.cpus} \
-        -ax map-ont \
-        --secondary=no \
-        ${hap1} \
-        haplotype/ont/ont_reads.fastq.gz \
-        | samtools sort -n -@ ${task.cpus} -o haplotype/ont/ont_hap1.bam - \
-    & minimap2 \
-        -t ${task.cpus} \
-        -ax map-ont \
-        --secondary=no \
-        ${hap2} \
-        haplotype/ont/ont_reads.fastq.gz \
-        | samtools sort -n -@ ${task.cpus} -o haplotype/ont/ont_hap2.bam -
+    (
+        minimap2 \
+            -t ${task.cpus.intdiv(2)} \
+            -ax map-ont \
+            --secondary=no \
+            ${hap1} \
+            haplotype/ont/ont_reads.fastq.gz \
+        | samtools sort -n -@ 1 -o haplotype/ont/ont_hap1.bam -
+    ) &
+    pid1=$!
+
+    (
+        minimap2 \
+            -t ${task.cpus.intdiv(2)} \
+            -ax map-ont \
+            --secondary=no \
+            ${hap2} \
+            haplotype/ont/ont_reads.fastq.gz \
+        | samtools sort -n -@ 1 -o haplotype/ont/ont_hap2.bam -
+    ) &
+    pid2=$!
+
+    status=0
+    wait "$pid1" || status=$?
+    wait "$pid2" || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "ERROR: ONT alignment failed" >&2
+        exit "$status"
+    fi
 
     python3 ${classifier} \
         --bam1 haplotype/ont/ont_hap1.bam \
@@ -105,7 +137,9 @@ process HAPLOTYPE_READS_ONT {
         --reads haplotype/ont/ont_reads.fastq.gz \
         --out-prefix haplotype/ont/ont \
         --min-mapq ${params.haplotype_min_mapq} \
-        --min-diff 10
+        --min-diff 10 \
+        --gzip
+
 
     zcat haplotype/ont/ont.hap1.fastq.gz haplotype/ont/ont.shared.fastq.gz \
         | gzip -c > haplotype/ont/ont.hap1.fastq.gz
@@ -149,20 +183,35 @@ process HAPLOTYPE_READS_WGS {
     bwa-mem2 index ${hap1}
     bwa-mem2 index ${hap2}
 
-    bwa-mem2 mem \
-        -t ${task.cpus} \
-        --secondary=no \
-        ${hap1} \
-        haplotype/wgs/wgs_reads_R1.fastq.gz \
-        haplotype/wgs/wgs_reads_R2.fastq.gz \
-        | samtools sort -n -@ ${task.cpus} -o haplotype/wgs/wgs_hap1.bam - \
-    & bwa-mem2 mem \
-        -t ${task.cpus} \
-        --secondary=no \
-        ${hap2} \
-        haplotype/wgs/wgs_reads_R1.fastq.gz \
-        haplotype/wgs/wgs_reads_R2.fastq.gz \
-        | samtools sort -n -@ ${task.cpus} -o haplotype/wgs/wgs_hap2.bam -
+    (
+        bwa-mem2 mem \
+            -t ${task.cpus.intdiv(2)} \
+            --secondary=no \
+            ${hap1} \
+            haplotype/wgs/wgs_reads_R1.fastq.gz \
+            haplotype/wgs/wgs_reads_R2.fastq.gz \
+        | samtools sort -n -@ 1 -o haplotype/wgs/wgs_hap1.bam -
+    ) &
+    pid1=$!
+
+    (
+        bwa-mem2 mem \
+            -t ${task.cpus.intdiv(2)} \
+            --secondary=no \
+            ${hap2} \
+            haplotype/wgs/wgs_reads_R1.fastq.gz \
+            haplotype/wgs/wgs_reads_R2.fastq.gz \
+        | samtools sort -n -@ 1 -o haplotype/wgs/wgs_hap2.bam -
+    ) &
+    pid2=$!
+
+    status=0
+    wait "$pid1" || status=$?
+    wait "$pid2" || status=$?
+    if [ "$status" -ne 0 ]; then
+        echo "ERROR: WGS alignment failed" >&2
+        exit "$status"
+    fi
 
     python3 ${classifier} \
         --bam1 haplotype/wgs/wgs_hap1.bam \
@@ -170,7 +219,8 @@ process HAPLOTYPE_READS_WGS {
         --r1 haplotype/wgs/wgs_reads_R1.fastq.gz \
         --r2 haplotype/wgs/wgs_reads_R2.fastq.gz \
         --out-prefix haplotype/wgs/wgs \
-        --min-mapq ${params.haplotype_min_mapq}
+        --min-mapq ${params.haplotype_min_mapq} \
+        --gzip
 
     zcat haplotype/wgs/wgs.hap1.R1.fq.gz haplotype/wgs/wgs.shared.R1.fq.gz \
         | gzip -c > haplotype/wgs/wgs.hap1.R1.fastq.gz
