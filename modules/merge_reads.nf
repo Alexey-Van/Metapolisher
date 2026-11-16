@@ -5,7 +5,7 @@ process MERGE_READS {
     container params.mapping_container
 
     input:
-        tuple val(prefix), path(reads)
+        tuple val(prefix), path(reads, arity: '1..*')
 
     output:
         path "${prefix}.fq.gz"
@@ -14,6 +14,11 @@ process MERGE_READS {
     """
     set -euo pipefail
 
-    cat ${reads.join(' ')} > ${prefix}.fq.gz
+    for read_file in ${reads.collect { it.toString() }.join(' ')}; do
+        case "\$read_file" in
+            *.gz) gzip -cd -- "\$read_file" ;;
+            *) cat -- "\$read_file" ;;
+        esac
+    done | gzip -c > ${prefix}.fq.gz
     """
 }

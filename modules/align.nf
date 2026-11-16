@@ -9,7 +9,7 @@ process ALIGN_HIFI {
     input:
         val ready
         path draft
-        path hifi
+        path hifi, arity: '1..*'
 
     output:
         path "hifi.sorted.bam", emit: bam
@@ -53,7 +53,7 @@ process ALIGN_ONT {
     input:
         val ready
         path draft
-        path ont
+        path ont, arity: '1..*'
 
     output:
         path "ont.sorted.bam", emit: bam
@@ -112,9 +112,9 @@ process ALIGN_WGS {
     """
     set -euo pipefail
 
-    bwa-mem2 index ${draft}
+    bwa-mem3 index ${draft}
 
-    bwa-mem2 mem \
+    bwa-mem3 mem \
         -t ${task.cpus} \
         ${draft} \
         ${r1} \

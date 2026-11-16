@@ -33,6 +33,12 @@ process MERQURY {
         "${asm}" \
         merqury_out
 
-    cp *.bed merqury_regions.bed
+    candidate=\$(find . -maxdepth 2 -type f -name '*.bed' \
+        -printf '%s\t%p\n' | sort -nr | head -n 1 | cut -f2-)
+    if [ -z "\${candidate}" ]; then
+        echo "ERROR: Merqury did not produce a BED track" >&2
+        exit 1
+    fi
+    cp "\${candidate}" merqury_regions.bed
     """
 }

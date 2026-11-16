@@ -5,8 +5,8 @@ process HAPLOTYPE_READS_HIFI {
     container params.mapping_container
 
     input:
-        path hap1
-        path hap2
+        path hap1, stageAs: 'hap1.fasta'
+        path hap2, stageAs: 'hap2.fasta'
         path classifier
         path reads, arity: '1..*'
 
@@ -23,7 +23,12 @@ process HAPLOTYPE_READS_HIFI {
 
     mkdir -p haplotype/hifi
 
-    cat ${read_args} > haplotype/hifi/hifi_reads.fastq.gz
+    for read_file in ${read_args}; do
+        case "\$read_file" in
+            *.gz) gzip -cd -- "\$read_file" ;;
+            *) cat -- "\$read_file" ;;
+        esac
+    done | gzip -c > haplotype/hifi/hifi_reads.fastq.gz
 
     (
         minimap2 \
@@ -66,10 +71,12 @@ process HAPLOTYPE_READS_HIFI {
 
 
     zcat haplotype/hifi/hifi.hap1.fastq.gz haplotype/hifi/hifi.shared.fastq.gz \
-        | gzip -c > haplotype/hifi/hifi.hap1.fastq.gz
+        | gzip -c > haplotype/hifi/hifi.hap1.merged.fastq.gz
+    mv haplotype/hifi/hifi.hap1.merged.fastq.gz haplotype/hifi/hifi.hap1.fastq.gz
 
     zcat haplotype/hifi/hifi.hap2.fastq.gz haplotype/hifi/hifi.shared.fastq.gz \
-        | gzip -c > haplotype/hifi/hifi.hap2.fastq.gz
+        | gzip -c > haplotype/hifi/hifi.hap2.merged.fastq.gz
+    mv haplotype/hifi/hifi.hap2.merged.fastq.gz haplotype/hifi/hifi.hap2.fastq.gz
     """
 }
 
@@ -81,8 +88,8 @@ process HAPLOTYPE_READS_ONT {
     container params.mapping_container
 
     input:
-        path hap1
-        path hap2
+        path hap1, stageAs: 'hap1.fasta'
+        path hap2, stageAs: 'hap2.fasta'
         path classifier
         path reads, arity: '1..*'
 
@@ -99,7 +106,12 @@ process HAPLOTYPE_READS_ONT {
 
     mkdir -p haplotype/ont
 
-    cat ${read_args} > haplotype/ont/ont_reads.fastq.gz
+    for read_file in ${read_args}; do
+        case "\$read_file" in
+            *.gz) gzip -cd -- "\$read_file" ;;
+            *) cat -- "\$read_file" ;;
+        esac
+    done | gzip -c > haplotype/ont/ont_reads.fastq.gz
 
     (
         minimap2 \
@@ -142,10 +154,12 @@ process HAPLOTYPE_READS_ONT {
 
 
     zcat haplotype/ont/ont.hap1.fastq.gz haplotype/ont/ont.shared.fastq.gz \
-        | gzip -c > haplotype/ont/ont.hap1.fastq.gz
+        | gzip -c > haplotype/ont/ont.hap1.merged.fastq.gz
+    mv haplotype/ont/ont.hap1.merged.fastq.gz haplotype/ont/ont.hap1.fastq.gz
 
     zcat haplotype/ont/ont.hap2.fastq.gz haplotype/ont/ont.shared.fastq.gz \
-        | gzip -c > haplotype/ont/ont.hap2.fastq.gz
+        | gzip -c > haplotype/ont/ont.hap2.merged.fastq.gz
+    mv haplotype/ont/ont.hap2.merged.fastq.gz haplotype/ont/ont.hap2.fastq.gz
     """
 }
 
@@ -157,8 +171,8 @@ process HAPLOTYPE_READS_WGS {
     container params.mapping_container
 
     input:
-        path hap1
-        path hap2
+        path hap1, stageAs: 'hap1.fasta'
+        path hap2, stageAs: 'hap2.fasta'
         path classifier
         path reads_r1, arity: '1..*'
         path reads_r2, arity: '1..*'
@@ -177,16 +191,25 @@ process HAPLOTYPE_READS_WGS {
 
     mkdir -p haplotype/wgs
 
-    cat ${r1_args} > haplotype/wgs/wgs_reads_R1.fastq.gz
-    cat ${r2_args} > haplotype/wgs/wgs_reads_R2.fastq.gz
+    for read_file in ${r1_args}; do
+        case "\$read_file" in
+            *.gz) gzip -cd -- "\$read_file" ;;
+            *) cat -- "\$read_file" ;;
+        esac
+    done | gzip -c > haplotype/wgs/wgs_reads_R1.fastq.gz
+    for read_file in ${r2_args}; do
+        case "\$read_file" in
+            *.gz) gzip -cd -- "\$read_file" ;;
+            *) cat -- "\$read_file" ;;
+        esac
+    done | gzip -c > haplotype/wgs/wgs_reads_R2.fastq.gz
 
-    bwa-mem2 index ${hap1}
-    bwa-mem2 index ${hap2}
+    bwa-mem3 index ${hap1}
+    bwa-mem3 index ${hap2}
 
     (
-        bwa-mem2 mem \
+        bwa-mem3 mem \
             -t ${task.cpus.intdiv(2)} \
-            --secondary=no \
             ${hap1} \
             haplotype/wgs/wgs_reads_R1.fastq.gz \
             haplotype/wgs/wgs_reads_R2.fastq.gz \
@@ -195,9 +218,8 @@ process HAPLOTYPE_READS_WGS {
     pid1=$!
 
     (
-        bwa-mem2 mem \
+        bwa-mem3 mem \
             -t ${task.cpus.intdiv(2)} \
-            --secondary=no \
             ${hap2} \
             haplotype/wgs/wgs_reads_R1.fastq.gz \
             haplotype/wgs/wgs_reads_R2.fastq.gz \
@@ -223,15 +245,19 @@ process HAPLOTYPE_READS_WGS {
         --gzip
 
     zcat haplotype/wgs/wgs.hap1.R1.fq.gz haplotype/wgs/wgs.shared.R1.fq.gz \
-        | gzip -c > haplotype/wgs/wgs.hap1.R1.fastq.gz
+        | gzip -c > haplotype/wgs/wgs.hap1.R1.merged.fastq.gz
+    mv haplotype/wgs/wgs.hap1.R1.merged.fastq.gz haplotype/wgs/wgs.hap1.R1.fastq.gz
 
     zcat haplotype/wgs/wgs.hap1.R2.fq.gz haplotype/wgs/wgs.shared.R2.fq.gz \
-        | gzip -c > haplotype/wgs/wgs.hap1.R2.fastq.gz
+        | gzip -c > haplotype/wgs/wgs.hap1.R2.merged.fastq.gz
+    mv haplotype/wgs/wgs.hap1.R2.merged.fastq.gz haplotype/wgs/wgs.hap1.R2.fastq.gz
 
     zcat haplotype/wgs/wgs.hap2.R1.fq.gz haplotype/wgs/wgs.shared.R1.fq.gz \
-        | gzip -c > haplotype/wgs/wgs.hap2.R1.fastq.gz
+        | gzip -c > haplotype/wgs/wgs.hap2.R1.merged.fastq.gz
+    mv haplotype/wgs/wgs.hap2.R1.merged.fastq.gz haplotype/wgs/wgs.hap2.R1.fastq.gz
     
     zcat haplotype/wgs/wgs.hap2.R2.fq.gz haplotype/wgs/wgs.shared.R2.fq.gz \
-        | gzip -c > haplotype/wgs/wgs.hap2.R2.fastq.gz
+        | gzip -c > haplotype/wgs/wgs.hap2.R2.merged.fastq.gz
+    mv haplotype/wgs/wgs.hap2.R2.merged.fastq.gz haplotype/wgs/wgs.hap2.R2.fastq.gz
     """
 }

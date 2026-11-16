@@ -124,7 +124,7 @@ def load_scores(bam_path, passes, k, threads):
             except KeyError:
                 sys.exit(f"Ошибка: у записи {r.query_name} в {bam_path} нет "
                          f"тега AS. Нужен aligner, который его пишет "
-                         f"(minimap2, bwa-mem2).")
+                         f"(minimap2, bwa-mem3).")
             cur = scores.get(name)
             if cur is None:
                 scores[name] = [a, r.mapping_quality]

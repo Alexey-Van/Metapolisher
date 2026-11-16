@@ -24,11 +24,11 @@ RUN micromamba config append channels conda-forge && \
     micromamba config append channels defaults
 
 RUN micromamba create -y -n sv \
-    sniffles \
-    cutesv \
-    jasmine \
-    samtools \
-    bcftools \
+    sniffles=2.8.1 \
+    cutesv=2.1.4 \
+    jasminesv=1.1.5 \
+    samtools=1.25 \
+    bcftools=1.25 \
     && micromamba clean -a -y
 
 ENV PATH=/opt/conda/envs/sv/bin:$PATH

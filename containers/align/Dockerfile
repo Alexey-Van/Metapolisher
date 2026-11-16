@@ -24,12 +24,15 @@ RUN micromamba config append channels conda-forge && \
     micromamba config append channels defaults
 
 RUN micromamba create -y -n align \
-    bwa-mem2 \
-    samtools \
-    minimap2 \
-    winnowmap \
-    racon \
-    bcftools \
+    python=3.11 \
+    bwa-mem3=0.17.0 \
+    samtools=1.25 \
+    bcftools=1.25 \
+    pysam=0.24.1 \
+    meryl=1.4.2 \
+    minimap2=2.31 \
+    winnowmap=2.03 \
+    racon=1.5.0 \
     && micromamba clean -a -y
 
 ENV PATH=/opt/conda/envs/align/bin:$PATH

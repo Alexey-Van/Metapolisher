@@ -8,9 +8,10 @@ process DEEPVARIANT {
         val ready
         path ref
         path ref_fai
-        path illumina_bam
-        path illumina_bai
-        val hifi_bam   // <-- теперь val, а не path
+        path illumina_bam, stageAs: 'wgs.bam'
+        path illumina_bai, stageAs: 'wgs.bam.bai'
+        path hifi_bam, stageAs: 'hifi.bam'
+        val has_hifi
 
     output:
         path "deepvariant.vcf.gz", emit: vcf
@@ -21,14 +22,14 @@ process DEEPVARIANT {
     """
     set -euo pipefail
 
-    if [ "${hifi_bam}" != "none" ] && [ -f "${hifi_bam}" ]; then
+    if [ "${has_hifi}" = "true" ]; then
         echo "[DeepVariant] Hybrid mode: Illumina + HiFi"
 
         samtools merge \
             -@ ${task.cpus} \
             merged.bam \
-            ${hifi_bam} \
-            ${illumina_bam}
+            hifi.bam \
+            wgs.bam
 
         samtools index merged.bam
 
@@ -45,7 +46,7 @@ process DEEPVARIANT {
         /opt/deepvariant/bin/run_deepvariant \
             --model_type WGS \
             --ref ${ref} \
-            --reads ${illumina_bam} \
+            --reads wgs.bam \
             --output_vcf deepvariant.vcf.gz \
             --num_shards ${task.cpus}
     fi

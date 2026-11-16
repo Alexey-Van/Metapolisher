@@ -2,6 +2,7 @@
 
 import argparse
 import pysam
+import gzip
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -10,9 +11,10 @@ from cyvcf2 import VCF
 from catboost import CatBoostClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score
-import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
 from sklearn.metrics import auc
@@ -59,7 +61,12 @@ def save_hyperparam_results(results, path="hyperparam_results.tsv"):
 
         rows.append(row)
 
-    df = pd.DataFrame(rows)
+    if rows:
+        df = pd.DataFrame(rows)
+    else:
+        df = pd.DataFrame(columns=[
+            "recall", "threshold"
+        ])
     df.to_csv(path, sep="\t", index=False)
     print(f"Saved hyperparameter search results to {path}")
 
@@ -223,6 +230,18 @@ def load_vcf_as_df(path, exclude_trees=None):
 
     df = pd.DataFrame(rows)
 
+    if df.empty:
+        return pd.DataFrame({
+            "CHROM": pd.Series(dtype="object"),
+            "POS": pd.Series(dtype="int64"),
+            "END": pd.Series(dtype="int64"),
+            "REF": pd.Series(dtype="object"),
+            "ALT": pd.Series(dtype="object"),
+            "SVTYPE": pd.Series(dtype="object"),
+            "SVLEN": pd.Series(dtype="float64"),
+            f"{prefix}_present": pd.Series(dtype="int64"),
+        })
+
     df, dropped = drop_useless_columns(df)
 
     if dropped:
@@ -344,7 +363,7 @@ def load_bed(path,value_col=None):
             if int(start) >= int(end):
                 continue
 
-            val = parts[value_col] if value_col else 1
+            val = parts[value_col] if value_col is not None and value_col < len(parts) else 1
 
             trees.setdefault(chrom,IntervalTree()).addi(
                 int(start),
@@ -548,17 +567,14 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
 
     df=df[df[param] >=threshold]
 
-    if df.empty:
-        return
-
     df=df.sort_values(param,ascending=False)
     df=df.drop_duplicates(["CHROM","POS"])
 
     best={(r.CHROM,r.POS):r for r in df.itertuples()}
 
     template=vcfs[0]
-
-    header=pysam.VariantFile(template).header.copy()
+    with pysam.VariantFile(template) as template_vcf:
+        header=template_vcf.header.copy()
 
     if param not in header.info:
 
@@ -571,31 +587,86 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
 
     out=pysam.VariantFile(out_vcf,"w",header=header)
 
+    emitted = set()
     for vcf in vcfs:
+        with pysam.VariantFile(vcf) as vf:
+            for v in vf:
+                key=(v.chrom,v.pos)
 
-        vf=pysam.VariantFile(vcf)
+                if key not in best or key in emitted:
+                    continue
 
-        for v in vf.fetch():
+                r=best[key]
+                emitted.add(key)
 
-            key=(v.chrom,v.pos)
+                nv=out.new_record(
+                    contig=v.chrom,
+                    start=v.start,
+                    stop=v.stop,
+                    alleles=v.alleles
+                )
 
-            if key not in best:
-                continue
+                nv.info[param]=float(r.ML_PROB)
 
-            r=best[key]
-
-            nv=out.new_record(
-                contig=v.chrom,
-                start=v.start,
-                stop=v.stop,
-                alleles=v.alleles
-            )
-
-            nv.info[param]=float(r.ML_PROB)
-
-            out.write(nv)
+                out.write(nv)
 
     out.close()
+
+
+def predict_with_catboost(args):
+
+    if not args.ml_model:
+        raise ValueError("predict mode requires --ml_model pointing to a CatBoost .cbm file")
+
+    if not Path(args.ml_model).is_file():
+        raise FileNotFoundError(f"CatBoost model was not found: {args.ml_model}")
+    if Path(args.ml_model).suffix.lower() != ".cbm":
+        raise ValueError("--ml_model must point to a CatBoost .cbm file")
+
+    print("[1] loading VCFs")
+    exclude_trees = load_telomers(args.exclude_telomers) if args.exclude_telomers else None
+    df = outer_merge_vcfs(args.vcfs, exclude_trees)
+
+    print("[2] annotations")
+    if args.flagger:
+        annotate_interval(df, load_bed(args.flagger, 3), "flagger")
+    if args.merqury:
+        annotate_interval(df, load_bed(args.merqury), "merqury")
+
+    model = CatBoostClassifier()
+    model.load_model(args.ml_model)
+
+    excluded = {
+        "TRUE_VARIANT", "CHROM", "POS", "END", "REF", "ALT",
+        "SVTYPE", "SVTYPE_NORM"
+    }
+    available = [col for col in df.columns if col not in excluded]
+    expected = list(model.feature_names_ or available)
+    X = df.reindex(columns=expected)
+
+    categorical_indices = set(model.get_cat_feature_indices())
+    for idx, col in enumerate(expected):
+        if idx in categorical_indices:
+            X[col] = X[col].fillna("0").astype(str)
+        else:
+            X[col] = pd.to_numeric(X[col], errors="coerce").fillna(0)
+
+    print(f"[3] prediction with {len(expected)} model features")
+    if df.empty:
+        df["ML_PROB"] = pd.Series(index=df.index, dtype=float)
+    else:
+        df["ML_PROB"] = model.predict_proba(X)[:, 1]
+
+    table_path = args.out_table or f"{args.prefix}.ml.variants.tsv"
+    vcf_path = args.out_vcf or f"{args.prefix}.ml.vcf"
+    df.to_csv(table_path, sep="\t", index=False)
+    print(f"Saved {table_path}")
+
+    # The current model's training path emits filtered SNVs. SV calls remain
+    # available in the feature table and can be enabled in a future model.
+    df_snv = df[df["SVTYPE"].apply(normalize_svtype) == "SNV"]
+    write_vcf(df_snv, args.vcfs, vcf_path, args.threshold, "ML_PROB")
+    print(f"Saved {vcf_path} (probability threshold: {args.threshold})")
 
 
 # ------------------------------------------------------------
@@ -603,6 +674,14 @@ def write_vcf(df,vcfs,out_vcf,threshold,param):
 # ------------------------------------------------------------
 
 def main(args):
+
+    if args.mode == "predict":
+        return predict_with_catboost(args)
+
+    if not args.truth_vcf:
+        raise ValueError("train mode requires --truth_vcf")
+    if not args.flagger or not args.merqury:
+        raise ValueError("train mode requires --flagger and --merqury")
 
     print("[1] loading VCFs")
 
@@ -612,6 +691,8 @@ def main(args):
 
 
     df=outer_merge_vcfs(args.vcfs, exclude_trees)
+    if df.empty:
+        raise RuntimeError("No candidate variants were found in the input VCFs")
 
     # print("[2] merfin")
 
@@ -640,6 +721,12 @@ def main(args):
 
     df["TRUE_VARIANT"]=build_truth_labels(df,truth)
     print("Найдено, вариантов:", sum(df["TRUE_VARIANT"]))
+    class_counts = df["TRUE_VARIANT"].value_counts()
+    if len(class_counts) < 2 or class_counts.min() < 3:
+        raise RuntimeError(
+            "Training needs at least three true and three false candidate variants "
+            "to create stratified train/validation/test splits"
+        )
 
     print("[5] SVTYPE")
 
@@ -691,8 +778,6 @@ def main(args):
     # 2. Обучение и валидация
     # -----------------------------
     results = []
-    models = []
-
     cat_cols = X_train.select_dtypes(include="object").columns.tolist() 
 
     param_grid = [
@@ -743,21 +828,20 @@ def main(args):
     
     save_hyperparam_results(results, f"{args.prefix}_hyperparams.tsv")
 
-    N = 10
-    top_models = sorted(results, key=lambda x: x["recall"], reverse=True)[:N]
+    best_result = max(results, key=lambda x: x["recall"])
 
-    print("Лучшая модель:", top_models[1]["params"])
+    print("Лучшая модель:", best_result["params"])
 
     print(f"[7] prediction for model")
 
-    test_prob_one = top_models[1]["model"].predict_proba(test_df[features])[:, 1]
+    test_prob_one = best_result["model"].predict_proba(test_df[features])[:, 1]
 
-    test_pred_one = (test_prob_one >= top_models[1]["threshold"]).astype(int)
+    test_pred_one = (test_prob_one >= best_result["threshold"]).astype(int)
 
     print("Отчёт для одной модели на test\n\n", classification_report(test_df["TRUE_VARIANT"], test_pred_one))
 
-    df["ML_PROB"] = top_models[1]["model"].predict_proba(df[features])[:, 1]
-    df["ML_PRED"] = (df["ML_PROB"] >= top_models[1]["threshold"]).astype(int)
+    df["ML_PROB"] = best_result["model"].predict_proba(df[features])[:, 1]
+    df["ML_PRED"] = (df["ML_PROB"] >= best_result["threshold"]).astype(int)
 
     print("Финальный отчёт для одной модели на всём геноме\n\n", classification_report(df["TRUE_VARIANT"], df["ML_PRED"]))
    
@@ -770,13 +854,11 @@ def main(args):
 
     df_snv_sub = df[df.SVTYPE_NORM == "SNV"]
 
-    write_vcf(df_snv_sub, args.vcfs, f"{args.prefix}.one_model.vcf", top_models[1]["threshold"], "ML_PROB")
+    write_vcf(df_snv_sub, args.vcfs, f"{args.prefix}.one_model.vcf", best_result["threshold"], "ML_PROB")
 
-    top_models[1]["model"].save_model(f"model_{args.prefix}.cbm")
+    best_result["model"].save_model(f"model_{args.prefix}.cbm")
 
-    df = df_snv_sub
-
-    print(f"Model ensemble done.")
+    print("Model training and prediction complete.")
 
     plt.hist(df.loc[df.TRUE_VARIANT == 0, "ML_PROB"], bins=50, alpha=0.5, label="0")
     plt.hist(df.loc[df.TRUE_VARIANT == 1, "ML_PROB"], bins=50, alpha=0.5, label="1")
@@ -808,7 +890,7 @@ def main(args):
     # model — обученный CatBoostClassifier
     # X_val — валидационные признаки
 
-    y_pred_proba = top_models[1]["model"].predict_proba(X_val)[:, 1]
+    y_pred_proba = best_result["model"].predict_proba(X_val)[:, 1]
 
     # -----------------------------
     # 1. ROC Curve
@@ -855,7 +937,7 @@ def main(args):
 
 
     # Confusion Matrix
-    cm = confusion_matrix(df["TRUE_VARIANT"], df["ML_PRED)"])
+    cm = confusion_matrix(df["TRUE_VARIANT"], df["ML_PRED"], labels=[0, 1])
     labels = ["Negative", "Positive"]
 
     plt.figure(figsize=(6, 5))
@@ -863,7 +945,7 @@ def main(args):
                 xticklabels=labels, yticklabels=labels)
     plt.xlabel("Predicted label")
     plt.ylabel("True label")
-    plt.title(f"Confusion Matrix (threshold = {threshold})")
+    plt.title(f"Confusion Matrix (threshold = {best_result['threshold']})")
     plt.savefig(f"matrix_{args.prefix}.png", dpi=200)
 
 
@@ -871,8 +953,11 @@ if __name__=="__main__":
 
     p=argparse.ArgumentParser()
 
+    p.add_argument("--mode", choices=["train", "predict"], default="predict")
     p.add_argument("--vcfs",nargs="+",required=True)
-    p.add_argument("--truth_vcf",required=True)
+    p.add_argument("--truth_vcf")
+    p.add_argument("--ml_model", help="Pre-trained CatBoost .cbm model for predict mode")
+    p.add_argument("--threshold", type=float, default=0.5)
     p.add_argument("--merfin_pass_vcf")
     p.add_argument("--merfin_scores_bed")
     p.add_argument("--merqury")
@@ -880,11 +965,14 @@ if __name__=="__main__":
     p.add_argument("--repeat_gff")
     p.add_argument("--liftoff_gff")
     p.add_argument("--low_complex")
-    p.add_argument("--flagger",required=True)
+    p.add_argument("--flagger")
     p.add_argument("--out_vcf")
-    p.add_argument("--out_table",default="variant_features.tsv")
+    p.add_argument("--out_table")
     p.add_argument("--exclude_telomers", help="BED file with telomere regions to exclude")
     p.add_argument("--prefix",required=True)
 
 
-    main(p.parse_args())
+    args = p.parse_args()
+    if args.mode == "predict" and not args.ml_model:
+        p.error("--ml_model is required in predict mode and must point to a CatBoost .cbm file")
+    main(args)

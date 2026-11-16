@@ -9,8 +9,9 @@ process AUTO_POLISH {
     input:
         val ready
         path draft
-        path reads
-        path readmers_meryl
+        path reads, arity: '1..*'
+        path wgs_r1
+        path wgs_r2
         val reads_type
 
     output:
@@ -18,11 +19,27 @@ process AUTO_POLISH {
         path "**"
 
     script:
+    def read_args = reads.collect { it.toString() }.join(' ')
+
     """
     set -euo pipefail
 
     THREADS=${task.cpus}
     ITERATIONS=1
+
+    for reads_file in ${read_args}; do
+        case "\$reads_file" in
+            *.gz) gzip -cd -- "\$reads_file" ;;
+            *) cat -- "\$reads_file" ;;
+        esac
+    done > long_reads.fastq
+
+    meryl count k=21 output wgs_readmers.meryl ${wgs_r1} ${wgs_r2}
+    meryl count k=21 output long_readmers.meryl long_reads.fastq
+    meryl union-sum \
+        output readmers.meryl \
+        wgs_readmers.meryl \
+        long_readmers.meryl
 
     cp ${draft} iter_0.consensus.fasta
 
@@ -51,7 +68,7 @@ process AUTO_POLISH {
                 -ax map-pb \
                 -t ${task.cpus} \
                 \${CURRENT} \
-                ${reads} \
+                long_reads.fastq \
                 > aln.sam
 
         elif [ "${reads_type}" = "ont" ]; then
@@ -73,7 +90,7 @@ process AUTO_POLISH {
                 -ax map-ont \
                 -t ${task.cpus} \
                 \${CURRENT} \
-                ${reads} \
+                long_reads.fastq \
                 > aln.sam
 
         else
@@ -91,7 +108,7 @@ process AUTO_POLISH {
 
         racon \
             -t ${task.cpus} \
-            ${reads} \
+            long_reads.fastq \
             filtered.sam \
             \${CURRENT} \
             > racon.fasta
@@ -121,7 +138,7 @@ process AUTO_POLISH {
         merfin \
             -sequence \${CURRENT} \
             -seqmers racon.meryl \
-            -readmers ${readmers_meryl} \
+            -readmers readmers.meryl \
             -peak 106 \
             -output merfin \
             -threads ${task.cpus} \

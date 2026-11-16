@@ -20,6 +20,10 @@ include { CUTESV as CUTESV_HIFI } from './modules/cutesv'
 include { FLAGGER      } from './modules/flagger'
 include { MERQURY     } from './modules/merqury'
 include { MEDAKA      } from './modules/medaka'
+include { ML_PREDICT } from './modules/ml_predict'
+include { ML_TRAIN } from './modules/ml_train'
+include { TRUTH_VCF } from './modules/truth_vcf'
+include { EMPTY_VCF } from './modules/empty_vcf'
 
 // ---------------------------------------------------------------------------
 // Diploid: отдельный алиас на каждый haplotype (H1 / H2)
@@ -64,6 +68,14 @@ include { MERQURY as MERQURY_H2 } from './modules/merqury'
 
 include { MEDAKA as MEDAKA_H1 } from './modules/medaka'
 include { MEDAKA as MEDAKA_H2 } from './modules/medaka'
+include { ML_PREDICT as ML_PREDICT_H1 } from './modules/ml_predict'
+include { ML_PREDICT as ML_PREDICT_H2 } from './modules/ml_predict'
+include { ML_TRAIN as ML_TRAIN_H1 } from './modules/ml_train'
+include { ML_TRAIN as ML_TRAIN_H2 } from './modules/ml_train'
+include { TRUTH_VCF as TRUTH_VCF_H1 } from './modules/truth_vcf'
+include { TRUTH_VCF as TRUTH_VCF_H2 } from './modules/truth_vcf'
+include { EMPTY_VCF as EMPTY_VCF_H1 } from './modules/empty_vcf'
+include { EMPTY_VCF as EMPTY_VCF_H2 } from './modules/empty_vcf'
 
 // ---------------------------------------------------------------------------
 // Уже раздельные процессы
@@ -87,59 +99,143 @@ def reads_channel(p) {
     return Channel.fromPath(p, checkIfExists: true)
 }
 
+def as_bool(value) {
+    value instanceof Boolean ? value : value?.toString()?.equalsIgnoreCase('true')
+}
+
 workflow {
 
-    ready = CHECK()
+    run_deepvariant = as_bool(params.run_deepvariant)
+    run_pepper = as_bool(params.run_pepper)
+    run_original_t2t = as_bool(params.run_original_t2t)
+    run_auto_polish = as_bool(params.run_auto_polish)
+    run_nextpolish2 = as_bool(params.run_nextpolish2)
+    run_sniffles = as_bool(params.run_sniffles)
+    run_cutesv = as_bool(params.run_cutesv)
+    run_flagger = as_bool(params.run_flagger)
+    run_merqury = as_bool(params.run_merqury)
+    run_medaka = as_bool(params.run_medaka)
+
+    def read_mode = params.hifi && params.ont ? 'WGS+HiFi+ONT' :
+                    params.hifi ? 'WGS+HiFi' : 'WGS+ONT'
+    log.info "Read mode: ${read_mode}"
+
+    if (!params.hifi && !params.ont) {
+        error "ERROR: provide at least one long-read input: --hifi and/or --ont"
+    }
+    workflow_mode = params.workflow_mode?.toString()?.toLowerCase()
+    if (!(workflow_mode in ['predict', 'train'])) {
+        error "ERROR: --workflow_mode must be predict or train"
+    }
+    if (!(params.ploidy in ['haploid', 'diploid'])) {
+        error "ERROR: --ploidy must be haploid or diploid"
+    }
+    def ml_threshold = params.ml_threshold.toString().toDouble()
+    if (workflow_mode == 'predict' && (ml_threshold < 0 || ml_threshold > 1)) {
+        error "ERROR: --ml_threshold must be between 0 and 1"
+    }
+    if (workflow_mode == 'predict') {
+        model_paths = params.ploidy == 'diploid' ?
+            [params.ml_model_hap1 ?: params.ml_model, params.ml_model_hap2 ?: params.ml_model] :
+            [params.ml_model]
+        if (model_paths.any { !it }) {
+            error "ERROR: prediction requires --ml_model (or both haplotype-specific model paths)"
+        }
+        if (model_paths.any { !it.toString().toLowerCase().endsWith('.cbm') }) {
+            error "ERROR: model paths must point to CatBoost .cbm files"
+        }
+    } else if (params.ploidy == 'haploid') {
+        if (!params.truth_fasta) error "ERROR: train mode requires --truth_fasta"
+    } else if (!params.truth_fasta_hap1 || !params.truth_fasta_hap2) {
+        error "ERROR: diploid train mode requires --truth_fasta_hap1 and --truth_fasta_hap2"
+    }
+    if (run_original_t2t && !run_deepvariant) {
+        error "ERROR: --run_original_t2t requires --run_deepvariant true"
+    }
+    if (!(run_deepvariant || (run_pepper && params.ont) || run_original_t2t ||
+          (run_nextpolish2 && params.hifi) || run_sniffles || run_cutesv)) {
+        error "ERROR: enable at least one VCF-producing caller/polisher for ML input"
+    }
+
+    containers_to_check = [params.mapping_container, params.ml_container]
+    if (run_deepvariant) containers_to_check << params.deepvariant_container
+    if (run_pepper && params.ont) containers_to_check << params.pepper_container
+    if (run_original_t2t || run_auto_polish ||
+        (run_nextpolish2 && params.hifi) || (run_medaka && params.ont) || run_merqury) {
+        containers_to_check << params.polishing_container
+    }
+    if (run_sniffles || run_cutesv) containers_to_check << params.sv_container
+    if (run_flagger) containers_to_check << params.flagger_container
+    if (workflow_mode == 'train') containers_to_check << params.truth_container
+
+    ready = CHECK(containers_to_check.unique())
+    ml_script = Channel.value(file("${baseDir}/scripts/vcf_catboost.py", checkIfExists: true))
+    truth_script = Channel.value(file("${baseDir}/../my_scripts/truth_paftools_syri.sh", checkIfExists: true))
+    if (workflow_mode == 'predict') {
+        if (params.ploidy == 'diploid') {
+            model_path_hap1 = params.ml_model_hap1 ?: params.ml_model
+            model_path_hap2 = params.ml_model_hap2 ?: params.ml_model
+            ml_model_hap1 = Channel.value(file(model_path_hap1, checkIfExists: true))
+            ml_model_hap2 = Channel.value(file(model_path_hap2, checkIfExists: true))
+        } else {
+            ml_model = Channel.value(file(params.ml_model, checkIfExists: true))
+        }
+    }
 
 
     // -----------------------------------------------------------------------
     // WGS reads
     // -----------------------------------------------------------------------
 
-    wgs_r1_files = Channel.empty()
-    wgs_r2_files = Channel.empty()
-
-    if (params.illumina) {
-
-        wgs_r1_files = Channel.fromPath(
-            "${params.illumina}/**/*1.fq.gz",
-            checkIfExists: true
-        )
-
-        wgs_r2_files = Channel.fromPath(
-            "${params.illumina}/**/*2.fq.gz",
-            checkIfExists: true
-        )
-
-    } else if (params.mgi) {
-
-        wgs_r1_files = Channel.fromPath(
-            "${params.mgi}/**/*1.fq.gz",
-            checkIfExists: true
-        )
-
-        wgs_r2_files = Channel.fromPath(
-            "${params.mgi}/**/*2.fq.gz",
-            checkIfExists: true
-        )
-
-    } else {
-
-        error "ERROR: Provide --illumina or --mgi"
+    wgs_path = params.wgs ?: params.illumina ?: params.mgi
+    if (!wgs_path) {
+        error "ERROR: provide paired WGS reads with --wgs (or legacy --illumina/--mgi)"
     }
 
+    wgs_files = reads_channel(wgs_path).collect()
+    wgs_pairs = wgs_files.map { files ->
+        def sorted = files.sort { it.name }
+        def fastqFiles = sorted.findAll { it.name ==~ /(?i).+\.(?:fastq|fq)(?:\.gz)?$/ }
+        def r1 = sorted.findAll { it.name ==~ /(?i).+_(?:R1|1)(?:_[0-9]+)?\.(?:fastq|fq)(?:\.gz)?$/ }
+        def r2 = sorted.findAll { it.name ==~ /(?i).+_(?:R2|2)(?:_[0-9]+)?\.(?:fastq|fq)(?:\.gz)?$/ }
+        def keyFor = { f, readNumber ->
+            def stem = f.name.replaceFirst(/(?i)\.(?:fastq|fq)(?:\.gz)?$/, '')
+            def markerPattern = readNumber == 1 ? '(?i)_(?:R1|1)(_[0-9]+)?$' : '(?i)_(?:R2|2)(_[0-9]+)?$'
+            def markerPatternCompiled = java.util.regex.Pattern.compile(markerPattern)
+            def marker = markerPatternCompiled.matcher(stem)
+            if (!marker.find()) return null
+            def lane = marker.group(1) ?: ''
+            def sample = stem.substring(0, marker.start())
+            lane ? "${sample}${lane}" : sample
+        }
+        def r1ByKey = [:]
+        def r2ByKey = [:]
+        r1.each { f ->
+            def key = keyFor(f, 1)
+            if (r1ByKey.containsKey(key)) throw new IllegalArgumentException("Duplicate WGS R1 sample/lane: ${key}")
+            r1ByKey[key] = f
+        }
+        r2.each { f ->
+            def key = keyFor(f, 2)
+            if (r2ByKey.containsKey(key)) throw new IllegalArgumentException("Duplicate WGS R2 sample/lane: ${key}")
+            r2ByKey[key] = f
+        }
+        if (r1ByKey.isEmpty() || r1ByKey.keySet() != r2ByKey.keySet() ||
+            fastqFiles.size() != r1.size() + r2.size()) {
+            throw new IllegalArgumentException("WGS input must contain matching R1/R2 FASTQ files with _R1/_R2 or _1/_2 suffixes")
+        }
+        def keys = r1ByKey.keySet().sort()
+        tuple(keys.collect { r1ByKey[it] }, keys.collect { r2ByKey[it] })
+    }
 
-    // Сохраняем исходные списки для haplotype classifier.
-    // MERGE_READS продолжает использоваться для обычной ветки.
+    wgs_r1_raw = wgs_pairs.map { it[0] }
+    wgs_r2_raw = wgs_pairs.map { it[1] }
 
-    wgs_r1_raw = wgs_r1_files.collect()
-    wgs_r2_raw = wgs_r2_files.collect()
-
-    wgs_r1 = wgs_r1_files.collect().map { files ->
+    wgs_r1 = wgs_r1_raw.map { files ->
         tuple("wgs_R1", files)
     }
 
-    wgs_r2 = wgs_r2_files.collect().map { files ->
+    wgs_r2 = wgs_r2_raw.map { files ->
         tuple("wgs_R2", files)
     }
 
@@ -177,6 +273,13 @@ workflow {
         hap2_fai = Channel.value(
             file("${params.hap2}.fai", checkIfExists: true)
         )
+
+        if (workflow_mode == 'train') {
+            truth_query_hap1 = Channel.value(file(params.truth_fasta_hap1, checkIfExists: true))
+            truth_query_hap2 = Channel.value(file(params.truth_fasta_hap2, checkIfExists: true))
+            truth_vcf_hap1 = TRUTH_VCF_H1(ready, truth_script, hap1, truth_query_hap1, "hap1").vcf
+            truth_vcf_hap2 = TRUTH_VCF_H2(ready, truth_script, hap2, truth_query_hap2, "hap2").vcf
+        }
 
         classifier = Channel.value(
             file(
@@ -307,7 +410,7 @@ workflow {
         // Отдельный DeepVariant для каждого haplotype.
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_deepvariant && params.hifi) {
 
             deepvariant_hap1 = DEEPVARIANT_H1(
                 ready,
@@ -315,7 +418,8 @@ workflow {
                 hap1_fai,
                 align_wgs_hap1.bam,
                 align_wgs_hap1.bai,
-                align_hifi_hap1.bam
+                align_hifi_hap1.bam,
+                true
             )
 
             deepvariant_hap2 = DEEPVARIANT_H2(
@@ -324,10 +428,11 @@ workflow {
                 hap2_fai,
                 align_wgs_hap2.bam,
                 align_wgs_hap2.bai,
-                align_hifi_hap2.bam
+                align_hifi_hap2.bam,
+                true
             )
 
-        } else {
+        } else if (run_deepvariant) {
 
             deepvariant_hap1 = DEEPVARIANT_H1(
                 ready,
@@ -335,7 +440,8 @@ workflow {
                 hap1_fai,
                 align_wgs_hap1.bam,
                 align_wgs_hap1.bai,
-                "none"
+                align_wgs_hap1.bam,
+                false
             )
 
             deepvariant_hap2 = DEEPVARIANT_H2(
@@ -344,7 +450,8 @@ workflow {
                 hap2_fai,
                 align_wgs_hap2.bam,
                 align_wgs_hap2.bai,
-                "none"
+                align_wgs_hap2.bam,
+                false
             )
         }
 
@@ -355,7 +462,7 @@ workflow {
         // Только если есть ONT.
         // -------------------------------------------------------------------
 
-        if (params.ont) {
+        if (run_pepper && params.ont) {
 
             pepper_hap1 = PEPPER_H1(
                 ready,
@@ -379,48 +486,37 @@ workflow {
         // ORIGINAL T2T
         // -------------------------------------------------------------------
 
-        if (params.ont) {
+        if (run_original_t2t) {
+            if (run_pepper && params.ont) {
+                original_pepper_hap1 = pepper_hap1.vcf
+                original_pepper_hap2 = pepper_hap2.vcf
+            } else {
+                empty_vcf_hap1 = EMPTY_VCF_H1(deepvariant_hap1.vcf)
+                empty_vcf_hap2 = EMPTY_VCF_H2(deepvariant_hap2.vcf)
+                original_pepper_hap1 = empty_vcf_hap1.vcf
+                original_pepper_hap2 = empty_vcf_hap2.vcf
+            }
 
             original_t2t_hap1 = ORIGINAL_T2T_H1(
                 ready,
                 deepvariant_hap1.vcf,
-                pepper_hap1.vcf,
+                original_pepper_hap1,
                 hap1,
                 wgs_hap1_r1,
                 wgs_hap1_r2,
-                params.hifi ? hifi_hap1 : "none"
+                params.hifi ? hifi_hap1 : wgs_hap1_r1,
+                params.hifi ? true : false
             )
 
             original_t2t_hap2 = ORIGINAL_T2T_H2(
                 ready,
                 deepvariant_hap2.vcf,
-                pepper_hap2.vcf,
+                original_pepper_hap2,
                 hap2,
                 wgs_hap2_r1,
                 wgs_hap2_r2,
-                params.hifi ? hifi_hap2 : "none"
-            )
-
-        } else {
-
-            original_t2t_hap1 = ORIGINAL_T2T_H1(
-                ready,
-                deepvariant_hap1.vcf,
-                "none",
-                hap1,
-                wgs_hap1_r1,
-                wgs_hap1_r2,
-                params.hifi ? hifi_hap1 : "none"
-            )
-
-            original_t2t_hap2 = ORIGINAL_T2T_H2(
-                ready,
-                deepvariant_hap2.vcf,
-                "none",
-                hap2,
-                wgs_hap2_r1,
-                wgs_hap2_r2,
-                params.hifi ? hifi_hap2 : "none"
+                params.hifi ? hifi_hap2 : wgs_hap2_r1,
+                params.hifi ? true : false
             )
         }
 
@@ -429,41 +525,22 @@ workflow {
         // AUTO POLISH
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
-
-            auto_polish_hap1 = AUTO_POLISH_H1(
-                ready,
-                hap1,
-                hifi_hap1,
-                original_t2t_hap1.readmers_meryl,
-                "hifi"
-            )
-
-            auto_polish_hap2 = AUTO_POLISH_H2(
-                ready,
-                hap2,
-                hifi_hap2,
-                original_t2t_hap2.readmers_meryl,
-                "hifi"
-            )
-
-        } else if (params.ont) {
-
-            auto_polish_hap1 = AUTO_POLISH_H1(
-                ready,
-                hap1,
-                ont_hap1,
-                original_t2t_hap1.readmers_meryl,
-                "ont"
-            )
-
-            auto_polish_hap2 = AUTO_POLISH_H2(
-                ready,
-                hap2,
-                ont_hap2,
-                original_t2t_hap2.readmers_meryl,
-                "ont"
-            )
+        if (run_auto_polish) {
+            if (params.hifi) {
+                auto_polish_hap1 = AUTO_POLISH_H1(
+                    ready, hap1, hifi_hap1, wgs_hap1_r1, wgs_hap1_r2, "hifi"
+                )
+                auto_polish_hap2 = AUTO_POLISH_H2(
+                    ready, hap2, hifi_hap2, wgs_hap2_r1, wgs_hap2_r2, "hifi"
+                )
+            } else {
+                auto_polish_hap1 = AUTO_POLISH_H1(
+                    ready, hap1, ont_hap1, wgs_hap1_r1, wgs_hap1_r2, "ont"
+                )
+                auto_polish_hap2 = AUTO_POLISH_H2(
+                    ready, hap2, ont_hap2, wgs_hap2_r1, wgs_hap2_r2, "ont"
+                )
+            }
         }
 
 
@@ -475,7 +552,7 @@ workflow {
         // HiFi нет   -> ALIGN_ONT
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_nextpolish2 && params.hifi) {
 
             np2_hap1 = NP2_H1(
                 ready,
@@ -493,23 +570,6 @@ workflow {
                 wgs_hap2_r2
             )
 
-        } else {
-
-            np2_hap1 = NP2_H1(
-                ready,
-                hap1,
-                align_ont_hap1.bam,
-                wgs_hap1_r1,
-                wgs_hap1_r2
-            )
-
-            np2_hap2 = NP2_H2(
-                ready,
-                hap2,
-                align_ont_hap2.bam,
-                wgs_hap2_r1,
-                wgs_hap2_r2
-            )
         }
 
 
@@ -517,9 +577,9 @@ workflow {
         // Sniffles
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_sniffles && params.hifi) {
 
-            sniffles_hap1 = SNIFFLES_HIFI_H1(
+            sniffles_hifi_hap1 = SNIFFLES_HIFI_H1(
                 ready,
                 hap1,
                 align_hifi_hap1.bam,
@@ -527,7 +587,7 @@ workflow {
                 "hifi"
             )
 
-            sniffles_hap2 = SNIFFLES_HIFI_H2(
+            sniffles_hifi_hap2 = SNIFFLES_HIFI_H2(
                 ready,
                 hap2,
                 align_hifi_hap2.bam,
@@ -535,9 +595,11 @@ workflow {
                 "hifi"
             )
 
-        } else {
+        }
 
-            sniffles_hap1 = SNIFFLES_ONT_H1(
+        if (run_sniffles && params.ont) {
+
+            sniffles_ont_hap1 = SNIFFLES_ONT_H1(
                 ready,
                 hap1,
                 align_ont_hap1.bam,
@@ -545,7 +607,7 @@ workflow {
                 "ont"
             )
 
-            sniffles_hap2 = SNIFFLES_ONT_H2(
+            sniffles_ont_hap2 = SNIFFLES_ONT_H2(
                 ready,
                 hap2,
                 align_ont_hap2.bam,
@@ -559,9 +621,9 @@ workflow {
         // CuteSV
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_cutesv && params.hifi) {
 
-            cutesv_hap1 = CUTESV_HIFI_H1(
+            cutesv_hifi_hap1 = CUTESV_HIFI_H1(
                 ready,
                 hap1,
                 align_hifi_hap1.bam,
@@ -569,7 +631,7 @@ workflow {
                 "hifi"
             )
 
-            cutesv_hap2 = CUTESV_HIFI_H2(
+            cutesv_hifi_hap2 = CUTESV_HIFI_H2(
                 ready,
                 hap2,
                 align_hifi_hap2.bam,
@@ -577,9 +639,11 @@ workflow {
                 "hifi"
             )
 
-        } else {
+        }
 
-            cutesv_hap1 = CUTESV_ONT_H1(
+        if (run_cutesv && params.ont) {
+
+            cutesv_ont_hap1 = CUTESV_ONT_H1(
                 ready,
                 hap1,
                 align_ont_hap1.bam,
@@ -587,7 +651,7 @@ workflow {
                 "ont"
             )
 
-            cutesv_hap2 = CUTESV_ONT_H2(
+            cutesv_ont_hap2 = CUTESV_ONT_H2(
                 ready,
                 hap2,
                 align_ont_hap2.bam,
@@ -604,7 +668,7 @@ workflow {
         // no HiFi -> ONT BAM
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_flagger && params.hifi) {
 
             flagger_hap1 = FLAGGER_H1(
                 ready,
@@ -618,7 +682,7 @@ workflow {
                 align_hifi_hap2.bam
             )
 
-        } else {
+        } else if (run_flagger) {
 
             flagger_hap1 = FLAGGER_H1(
                 ready,
@@ -638,19 +702,29 @@ workflow {
         // Merqury
         // -------------------------------------------------------------------
 
-        merqury_hap1 = MERQURY_H1(
-            ready,
-            hap1,
-            wgs_hap1_r1,
-            wgs_hap1_r2
-        )
+        if (run_merqury) {
+            merqury_hap1 = MERQURY_H1(ready, hap1, wgs_hap1_r1, wgs_hap1_r2)
+            merqury_hap2 = MERQURY_H2(ready, hap2, wgs_hap2_r1, wgs_hap2_r2)
+            merqury_bed_hap1 = merqury_hap1.bed
+            merqury_bed_hap2 = merqury_hap2.bed
+        } else {
+            bed1 = params.merqury_bed_hap1 ?: params.merqury_bed
+            bed2 = params.merqury_bed_hap2 ?: params.merqury_bed
+            if (!bed1 || !bed2) error "ERROR: disabling Merqury requires --merqury_bed_hap1/--merqury_bed_hap2 or --merqury_bed"
+            merqury_bed_hap1 = Channel.value(file(bed1, checkIfExists: true))
+            merqury_bed_hap2 = Channel.value(file(bed2, checkIfExists: true))
+        }
 
-        merqury_hap2 = MERQURY_H2(
-            ready,
-            hap2,
-            wgs_hap2_r1,
-            wgs_hap2_r2
-        )
+        if (!run_flagger) {
+            bed1 = params.flagger_bed_hap1 ?: params.flagger_bed
+            bed2 = params.flagger_bed_hap2 ?: params.flagger_bed
+            if (!bed1 || !bed2) error "ERROR: disabling Flagger requires --flagger_bed_hap1/--flagger_bed_hap2 or --flagger_bed"
+            flagger_hap1_bed = Channel.value(file(bed1, checkIfExists: true))
+            flagger_hap2_bed = Channel.value(file(bed2, checkIfExists: true))
+        } else if (run_flagger) {
+            flagger_hap1_bed = flagger_hap1.bed
+            flagger_hap2_bed = flagger_hap2.bed
+        }
 
 
         // -------------------------------------------------------------------
@@ -659,7 +733,7 @@ workflow {
         // Только при наличии ONT.
         // -------------------------------------------------------------------
 
-        if (params.ont) {
+        if (run_medaka && params.ont) {
 
             medaka_hap1 = MEDAKA_H1(
                 ready,
@@ -674,6 +748,64 @@ workflow {
             )
         }
 
+        ml_vcf_channels_hap1 = []
+        ml_vcf_channels_hap2 = []
+        if (run_deepvariant) {
+            ml_vcf_channels_hap1 << deepvariant_hap1.vcf
+            ml_vcf_channels_hap2 << deepvariant_hap2.vcf
+        }
+        if (run_pepper && params.ont) {
+            ml_vcf_channels_hap1 << pepper_hap1.vcf
+            ml_vcf_channels_hap2 << pepper_hap2.vcf
+        }
+        if (run_original_t2t) {
+            ml_vcf_channels_hap1 << original_t2t_hap1.vcf
+            ml_vcf_channels_hap2 << original_t2t_hap2.vcf
+        }
+        if (run_nextpolish2 && params.hifi) {
+            ml_vcf_channels_hap1 << np2_hap1.vcf
+            ml_vcf_channels_hap2 << np2_hap2.vcf
+        }
+        if (run_sniffles && params.hifi) {
+            ml_vcf_channels_hap1 << sniffles_hifi_hap1.vcf
+            ml_vcf_channels_hap2 << sniffles_hifi_hap2.vcf
+        }
+        if (run_sniffles && params.ont) {
+            ml_vcf_channels_hap1 << sniffles_ont_hap1.vcf
+            ml_vcf_channels_hap2 << sniffles_ont_hap2.vcf
+        }
+        if (run_cutesv && params.hifi) {
+            ml_vcf_channels_hap1 << cutesv_hifi_hap1.vcf
+            ml_vcf_channels_hap2 << cutesv_hifi_hap2.vcf
+        }
+        if (run_cutesv && params.ont) {
+            ml_vcf_channels_hap1 << cutesv_ont_hap1.vcf
+            ml_vcf_channels_hap2 << cutesv_ont_hap2.vcf
+        }
+        if (ml_vcf_channels_hap1.isEmpty()) error "ERROR: no VCF outputs available for the ML stage"
+
+        ml_vcfs_hap1 = Channel.merge(*ml_vcf_channels_hap1).flatten().collect()
+        ml_vcfs_hap2 = Channel.merge(*ml_vcf_channels_hap2).flatten().collect()
+        if (workflow_mode == 'train') {
+            ML_TRAIN_H1(
+                ready, ml_script, ml_vcfs_hap1, truth_vcf_hap1,
+                flagger_hap1_bed, merqury_bed_hap1, "hap1"
+            )
+            ML_TRAIN_H2(
+                ready, ml_script, ml_vcfs_hap2, truth_vcf_hap2,
+                flagger_hap2_bed, merqury_bed_hap2, "hap2"
+            )
+        } else {
+            ML_PREDICT_H1(
+                ready, ml_script, ml_model_hap1, ml_vcfs_hap1,
+                flagger_hap1_bed, merqury_bed_hap1, "hap1"
+            )
+            ML_PREDICT_H2(
+                ready, ml_script, ml_model_hap2, ml_vcfs_hap2,
+                flagger_hap2_bed, merqury_bed_hap2, "hap2"
+            )
+        }
+
 
     } else {
 
@@ -685,6 +817,11 @@ workflow {
         draft = Channel.value(
             file(params.draft, checkIfExists: true)
         )
+
+        if (workflow_mode == 'train') {
+            truth_query = Channel.value(file(params.truth_fasta, checkIfExists: true))
+            truth_vcf = TRUTH_VCF(ready, truth_script, draft, truth_query, "haploid").vcf
+        }
 
         draft_fai = Channel.value(
             file("${params.draft}.fai", checkIfExists: true)
@@ -728,7 +865,7 @@ workflow {
         // DeepVariant
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_deepvariant && params.hifi) {
 
             deepvariant = DEEPVARIANT(
                 ready,
@@ -736,10 +873,11 @@ workflow {
                 draft_fai,
                 align_wgs.bam,
                 align_wgs.bai,
-                align_hifi.bam
+                align_hifi.bam,
+                true
             )
 
-        } else {
+        } else if (run_deepvariant) {
 
             deepvariant = DEEPVARIANT(
                 ready,
@@ -747,7 +885,8 @@ workflow {
                 draft_fai,
                 align_wgs.bam,
                 align_wgs.bai,
-                "none"
+                align_wgs.bam,
+                false
             )
         }
 
@@ -756,7 +895,7 @@ workflow {
         // Pepper
         // -------------------------------------------------------------------
 
-        if (params.ont) {
+        if (run_pepper && params.ont) {
 
             pepper = PEPPER(
                 ready,
@@ -772,28 +911,23 @@ workflow {
         // ORIGINAL T2T
         // -------------------------------------------------------------------
 
-        if (params.ont) {
+        if (run_original_t2t) {
+            if (run_pepper && params.ont) {
+                original_pepper = pepper.vcf
+            } else {
+                empty_vcf = EMPTY_VCF(deepvariant.vcf)
+                original_pepper = empty_vcf.vcf
+            }
 
             original_t2t = ORIGINAL_T2T(
                 ready,
                 deepvariant.vcf,
-                pepper.vcf,
+                original_pepper,
                 draft,
                 wgs_r1,
                 wgs_r2,
-                params.hifi ? hifi_reads : "none"
-            )
-
-        } else {
-
-            original_t2t = ORIGINAL_T2T(
-                ready,
-                deepvariant.vcf,
-                "none",
-                draft,
-                wgs_r1,
-                wgs_r2,
-                params.hifi ? hifi_reads : "none"
+                params.hifi ? hifi_reads : wgs_r1,
+                params.hifi ? true : false
             )
         }
 
@@ -802,25 +936,16 @@ workflow {
         // Auto polish
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
-
-            auto_polish = AUTO_POLISH(
-                ready,
-                draft,
-                hifi_reads,
-                original_t2t.readmers_meryl,
-                "hifi"
-            )
-
-        } else if (params.ont) {
-
-            auto_polish = AUTO_POLISH(
-                ready,
-                draft,
-                ont_reads,
-                original_t2t.readmers_meryl,
-                "ont"
-            )
+        if (run_auto_polish) {
+            if (params.hifi) {
+                auto_polish = AUTO_POLISH(
+                    ready, draft, hifi_reads, wgs_r1, wgs_r2, "hifi"
+                )
+            } else {
+                auto_polish = AUTO_POLISH(
+                    ready, draft, ont_reads, wgs_r1, wgs_r2, "ont"
+                )
+            }
         }
 
 
@@ -828,7 +953,7 @@ workflow {
         // NextPolish2
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_nextpolish2 && params.hifi) {
 
             np2 = NP2(
                 ready,
@@ -838,15 +963,6 @@ workflow {
                 wgs_r2
             )
 
-        } else {
-
-            np2 = NP2(
-                ready,
-                draft,
-                align_ont.bam,
-                wgs_r1,
-                wgs_r2
-            )
         }
 
 
@@ -854,7 +970,7 @@ workflow {
         // Sniffles
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_sniffles && params.hifi) {
 
             sniffles_hifi = SNIFFLES_HIFI(
                 ready,
@@ -864,7 +980,9 @@ workflow {
                 "hifi"
             )
 
-        } else {
+        }
+
+        if (run_sniffles && params.ont) {
 
             sniffles_ont = SNIFFLES_ONT(
                 ready,
@@ -880,7 +998,7 @@ workflow {
         // CuteSV
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_cutesv && params.hifi) {
 
             cutesv_hifi = CUTESV_HIFI(
                 ready,
@@ -890,7 +1008,9 @@ workflow {
                 "hifi"
             )
 
-        } else {
+        }
+
+        if (run_cutesv && params.ont) {
 
             cutesv_ont = CUTESV_ONT(
                 ready,
@@ -906,7 +1026,7 @@ workflow {
         // Flagger
         // -------------------------------------------------------------------
 
-        if (params.hifi) {
+        if (run_flagger && params.hifi) {
 
             flagger = FLAGGER(
                 ready,
@@ -914,7 +1034,7 @@ workflow {
                 align_hifi.bam
             )
 
-        } else {
+        } else if (run_flagger) {
 
             flagger = FLAGGER(
                 ready,
@@ -928,24 +1048,56 @@ workflow {
         // Merqury
         // -------------------------------------------------------------------
 
-        merqury = MERQURY(
-            ready,
-            draft,
-            wgs_r1,
-            wgs_r2
-        )
+        if (run_merqury) {
+            merqury = MERQURY(ready, draft, wgs_r1, wgs_r2)
+            merqury_bed_for_ml = merqury.bed
+        } else {
+            if (!params.merqury_bed) error "ERROR: disabling Merqury requires --merqury_bed"
+            merqury_bed_for_ml = Channel.value(file(params.merqury_bed, checkIfExists: true))
+        }
+
+        if (!run_flagger) {
+            if (!params.flagger_bed) error "ERROR: disabling Flagger requires --flagger_bed"
+            flagger_bed_for_ml = Channel.value(file(params.flagger_bed, checkIfExists: true))
+        } else {
+            flagger_bed_for_ml = flagger.bed
+        }
 
 
         // -------------------------------------------------------------------
         // Medaka
         // -------------------------------------------------------------------
 
-        if (params.ont) {
+        if (run_medaka && params.ont) {
 
             medaka = MEDAKA(
                 ready,
                 draft,
                 ont_reads
+            )
+        }
+
+        ml_vcf_channels = []
+        if (run_deepvariant) ml_vcf_channels << deepvariant.vcf
+        if (run_pepper && params.ont) ml_vcf_channels << pepper.vcf
+        if (run_original_t2t) ml_vcf_channels << original_t2t.vcf
+        if (run_nextpolish2 && params.hifi) ml_vcf_channels << np2.vcf
+        if (run_sniffles && params.hifi) ml_vcf_channels << sniffles_hifi.vcf
+        if (run_sniffles && params.ont) ml_vcf_channels << sniffles_ont.vcf
+        if (run_cutesv && params.hifi) ml_vcf_channels << cutesv_hifi.vcf
+        if (run_cutesv && params.ont) ml_vcf_channels << cutesv_ont.vcf
+        if (ml_vcf_channels.isEmpty()) error "ERROR: no VCF outputs available for the ML stage"
+
+        ml_vcfs = Channel.merge(*ml_vcf_channels).flatten().collect()
+        if (workflow_mode == 'train') {
+            ML_TRAIN(
+                ready, ml_script, ml_vcfs, truth_vcf,
+                flagger_bed_for_ml, merqury_bed_for_ml, "haploid"
+            )
+        } else {
+            ML_PREDICT(
+                ready, ml_script, ml_model, ml_vcfs,
+                flagger_bed_for_ml, merqury_bed_for_ml, "haploid"
             )
         }
     }

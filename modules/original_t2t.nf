@@ -9,9 +9,10 @@ process ORIGINAL_T2T {
         path deepvariant_vcf
         path pepper_vcf
         path draft
-        path illumina_r1
-        path illumina_r2
-        val hifi   // <-- теперь это val, а не path
+        path illumina_r1, stageAs: 'wgs_R1.fastq.gz'
+        path illumina_r2, stageAs: 'wgs_R2.fastq.gz'
+        path hifi, arity: '1..*', stageAs: 'hifi/*'
+        val has_hifi
 
     output:
         path "merfin_results*.vcf", emit: vcf
@@ -50,7 +51,7 @@ process ORIGINAL_T2T {
     echo "[6] Illumina kmers"
     meryl count k=\${K} output \${PREFIX}.illumina_readmers.meryl ${illumina_r1} ${illumina_r2}
 
-    if [ "${hifi}" != "none" ]; then
+    if [ "${has_hifi}" = "true" ]; then
         echo "[7] HiFi kmers"
         meryl count k=\${K} output \${PREFIX}.hifi_readmers.meryl ${hifi}
 
