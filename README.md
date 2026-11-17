@@ -44,13 +44,13 @@ This section covers setup, input preparation, prediction, training, configuratio
 
 ### 1. Requirements and container setup
 
-Install Nextflow with DSL2 support and Docker, and make sure the Docker daemon is running. The local profile enables Docker. Build the workflow images once, and rebuild them after changing a Dockerfile:
+Install Nextflow with DSL2 support, Docker, and either Apptainer or Singularity. Make sure the Docker daemon is running. The local profile enables Docker. Build the workflow images once, and rebuild them after changing a Dockerfile:
 
 ```bash
 bash scripts/build_container.sh
 ```
 
-The build script also pulls the external DeepVariant, Pepper, and Flagger images, so it needs network access. The workflow checks for the images required by the selected tools before starting.
+The build script also pulls the external DeepVariant, Pepper, and Flagger images, then exports all local and external images as `.sif` files to `scripts/containers/sif/`. It needs network access and a working Docker daemon. Set `SIF_DIR` to choose another output directory.
 
 The local profile is configured for a large machine (up to 32 CPUs and 300 GB RAM per task). Adjust the `local` profile resource defaults in `scripts/nextflow.config` for a smaller host before running. The `slurm` profile selects the Slurm executor and tool-specific resources. It requires Docker and the built images to be accessible on compute nodes; clusters that require Apptainer/Singularity need site-specific container configuration.
 
