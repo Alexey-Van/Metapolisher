@@ -80,8 +80,8 @@ include { EMPTY_VCF as EMPTY_VCF_H2 } from './modules/empty_vcf'
 // ---------------------------------------------------------------------------
 // Уже раздельные процессы
 // ---------------------------------------------------------------------------
-include { MERGE_READS as MERGE_READS_HAP1 } from './modules/merge_reads'
-include { MERGE_READS as MERGE_READS_HAP2 } from './modules/merge_reads'
+include { MERGE_READS as MERGE_WGS_R1 } from './modules/merge_reads'
+include { MERGE_READS as MERGE_WGS_R2 } from './modules/merge_reads'
 include { HAPLOTYPE_READS_HIFI } from './modules/haplotype_reads'
 include { HAPLOTYPE_READS_ONT  } from './modules/haplotype_reads'
 include { HAPLOTYPE_READS_WGS  } from './modules/haplotype_reads'
@@ -247,17 +247,6 @@ workflow {
 
     wgs_r1_raw = wgs_pairs.map { it[0] }
     wgs_r2_raw = wgs_pairs.map { it[1] }
-
-    wgs_r1 = wgs_r1_raw.map { files ->
-        tuple("wgs_R1", files)
-    }
-
-    wgs_r2 = wgs_r2_raw.map { files ->
-        tuple("wgs_R2", files)
-    }
-
-    wgs_r1 = MERGE_READS_HAP1(wgs_r1)
-    wgs_r2 = MERGE_READS_HAP2(wgs_r2)
 
 
     // -----------------------------------------------------------------------
@@ -834,6 +823,23 @@ workflow {
         draft = Channel.value(
             file(params.draft, checkIfExists: true)
         )
+
+        // Haploid input: bypass compression/merge for a single WGS pair;
+        // merge each mate only when multiple lane files were supplied.
+        wgs_lane_routes = wgs_pairs.branch {
+            multiple: it[0].size() > 1
+            single: it[0].size() == 1
+        }
+        wgs_r1_single = wgs_lane_routes.single.map { pair -> pair[0][0] }
+        wgs_r2_single = wgs_lane_routes.single.map { pair -> pair[1][0] }
+        wgs_r1_merged = MERGE_WGS_R1(
+            wgs_lane_routes.multiple.map { pair -> tuple("wgs_R1", pair[0]) }
+        )
+        wgs_r2_merged = MERGE_WGS_R2(
+            wgs_lane_routes.multiple.map { pair -> tuple("wgs_R2", pair[1]) }
+        )
+        wgs_r1 = mix_channels([wgs_r1_single, wgs_r1_merged])
+        wgs_r2 = mix_channels([wgs_r2_single, wgs_r2_merged])
 
         if (workflow_mode == 'train') {
             truth_query = Channel.value(file(params.truth_fasta, checkIfExists: true))

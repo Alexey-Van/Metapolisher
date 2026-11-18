@@ -64,7 +64,7 @@ Every run requires paired WGS reads and at least one long-read input. Supply HiF
 | WGS + HiFi | WGS + HiFi alignment, hybrid DeepVariant, and HiFi-compatible tools |
 | WGS + HiFi + ONT | Both long-read routes; callers use alignments for their matching platform |
 
-`wgs`, `hifi`, and `ont` accept a FASTQ file, a glob, or a directory. WGS must be paired-end. File names must end in `_R1`/`_R2` or `_1`/`_2` before the FASTQ suffix; lane suffixes such as `_001` are supported. R1 and R2 must have matching sample and lane names. Multiple WGS lanes are merged before alignment; long-read files are passed together to their aligner. Provide data for one biological sample per run.
+`wgs`, `hifi`, and `ont` accept a FASTQ file, a glob, or a directory. WGS must be paired-end. File names must end in `_R1`/`_R2` or `_1`/`_2` before the FASTQ suffix; lane suffixes such as `_001` are supported. R1 and R2 must have matching sample and lane names. Multiple WGS lanes are merged before alignment; a single WGS pair goes directly to alignment without a merge task. Long-read files are passed together to their aligner. Provide data for one biological sample per run.
 
 Examples of supported names:
 
