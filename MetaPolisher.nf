@@ -103,6 +103,12 @@ def as_bool(value) {
     value instanceof Boolean ? value : value?.toString()?.equalsIgnoreCase('true')
 }
 
+def mix_channels(channels) {
+    def active = channels.findAll { it != null }
+    if (active.isEmpty()) return Channel.empty()
+    active.drop(1).inject(active[0]) { merged, next -> merged.mix(next) }
+}
+
 workflow {
 
     run_deepvariant = as_bool(params.run_deepvariant)
@@ -784,8 +790,8 @@ workflow {
         }
         if (ml_vcf_channels_hap1.isEmpty()) error "ERROR: no VCF outputs available for the ML stage"
 
-        ml_vcfs_hap1 = Channel.merge(*ml_vcf_channels_hap1).flatten().collect()
-        ml_vcfs_hap2 = Channel.merge(*ml_vcf_channels_hap2).flatten().collect()
+        ml_vcfs_hap1 = mix_channels(ml_vcf_channels_hap1).flatten().collect()
+        ml_vcfs_hap2 = mix_channels(ml_vcf_channels_hap2).flatten().collect()
         if (workflow_mode == 'train') {
             ML_TRAIN_H1(
                 ready, ml_script, ml_vcfs_hap1, truth_vcf_hap1,
@@ -1088,7 +1094,7 @@ workflow {
         if (run_cutesv && params.ont) ml_vcf_channels << cutesv_ont.vcf
         if (ml_vcf_channels.isEmpty()) error "ERROR: no VCF outputs available for the ML stage"
 
-        ml_vcfs = Channel.merge(*ml_vcf_channels).flatten().collect()
+        ml_vcfs = mix_channels(ml_vcf_channels).flatten().collect()
         if (workflow_mode == 'train') {
             ML_TRAIN(
                 ready, ml_script, ml_vcfs, truth_vcf,
