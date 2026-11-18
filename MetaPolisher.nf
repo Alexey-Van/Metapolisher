@@ -89,14 +89,25 @@ include { HAPLOTYPE_READS_WGS  } from './modules/haplotype_reads'
 
 // Принимает файл, glob или ДИРЕКТОРИЮ с ридами и возвращает канал файлов.
 def reads_channel(p) {
-    def f = file(p)
-    if (f.isDirectory()) {
-        return Channel.fromPath(
-            "${f}/**/*.{fastq,fq,fastq.gz,fq.gz}",
-            checkIfExists: true
-        )
+    def inputs = p instanceof Collection ? p.flatten() : [p]
+    def channels = inputs.collect { rawInput ->
+        def inputPath = rawInput.toString()
+
+        // Avoid calling isDirectory() on a glob, and accept either one path
+        // or a list of files/directories/globs from the params file.
+        if (!(inputPath =~ /[*?{}]/)) {
+            def candidate = file(inputPath)
+            if (candidate.isDirectory()) {
+                return Channel.fromPath(
+                    "${candidate}/**/*.{fastq,fq,fastq.gz,fq.gz}",
+                    checkIfExists: true
+                )
+            }
+        }
+
+        Channel.fromPath(inputPath, checkIfExists: true)
     }
-    return Channel.fromPath(p, checkIfExists: true)
+    mix_channels(channels)
 }
 
 def as_bool(value) {
