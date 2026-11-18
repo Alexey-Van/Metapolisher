@@ -9,8 +9,9 @@ process TRUTH_VCF {
     input:
         val ready
         path truth_script
-        path ref, stageAs: 'ref.fa'
-        path query, stageAs: 'query.fa'
+        path ref
+        path ref_indexes, arity: '1..2'
+        path query
         val prefix
 
     output:

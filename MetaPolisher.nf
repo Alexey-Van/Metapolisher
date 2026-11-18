@@ -114,6 +114,17 @@ def as_bool(value) {
     value instanceof Boolean ? value : value?.toString()?.equalsIgnoreCase('true')
 }
 
+// DeepVariant needs the FASTA indexes staged beside the reference. Compressed
+// FASTA files require both .fai and .gzi; plain FASTA files require only .fai.
+def reference_indexes(fasta) {
+    def fastaPath = fasta.toString()
+    def indexes = [file("${fastaPath}.fai", checkIfExists: true)]
+    if (fastaPath.toLowerCase().endsWith('.gz')) {
+        indexes << file("${fastaPath}.gzi", checkIfExists: true)
+    }
+    Channel.value(indexes)
+}
+
 def mix_channels(channels) {
     def active = channels.findAll { it != null }
     if (active.isEmpty()) return Channel.empty()
@@ -187,7 +198,7 @@ workflow {
 
     ready = CHECK(containers_to_check.unique())
     ml_script = Channel.value(file("${baseDir}/scripts/vcf_catboost.py", checkIfExists: true))
-    truth_script = Channel.value(file("${baseDir}/../my_scripts/truth_paftools_syri.sh", checkIfExists: true))
+    truth_script = Channel.value(file("${baseDir}/scripts/truth_paftools_syri.sh", checkIfExists: true))
     if (workflow_mode == 'predict') {
         if (params.ploidy == 'diploid') {
             model_path_hap1 = params.ml_model_hap1 ?: params.ml_model
@@ -272,19 +283,14 @@ workflow {
             file(params.hap2, checkIfExists: true)
         )
 
-        hap1_fai = Channel.value(
-            file("${params.hap1}.fai", checkIfExists: true)
-        )
-
-        hap2_fai = Channel.value(
-            file("${params.hap2}.fai", checkIfExists: true)
-        )
+        hap1_indexes = reference_indexes(params.hap1)
+        hap2_indexes = reference_indexes(params.hap2)
 
         if (workflow_mode == 'train') {
             truth_query_hap1 = Channel.value(file(params.truth_fasta_hap1, checkIfExists: true))
             truth_query_hap2 = Channel.value(file(params.truth_fasta_hap2, checkIfExists: true))
-            truth_vcf_hap1 = TRUTH_VCF_H1(ready, truth_script, hap1, truth_query_hap1, "hap1").vcf
-            truth_vcf_hap2 = TRUTH_VCF_H2(ready, truth_script, hap2, truth_query_hap2, "hap2").vcf
+            truth_vcf_hap1 = TRUTH_VCF_H1(ready, truth_script, hap1, hap1_indexes, truth_query_hap1, "hap1").vcf
+            truth_vcf_hap2 = TRUTH_VCF_H2(ready, truth_script, hap2, hap2_indexes, truth_query_hap2, "hap2").vcf
         }
 
         classifier = Channel.value(
@@ -421,21 +427,21 @@ workflow {
             deepvariant_hap1 = DEEPVARIANT_H1(
                 ready,
                 hap1,
-                hap1_fai,
+                hap1_indexes,
                 align_wgs_hap1.bam,
                 align_wgs_hap1.bai,
                 align_hifi_hap1.bam,
-                true
+                'HYBRID_PACBIO_ILLUMINA'
             )
 
             deepvariant_hap2 = DEEPVARIANT_H2(
                 ready,
                 hap2,
-                hap2_fai,
+                hap2_indexes,
                 align_wgs_hap2.bam,
                 align_wgs_hap2.bai,
                 align_hifi_hap2.bam,
-                true
+                'HYBRID_PACBIO_ILLUMINA'
             )
 
         } else if (run_deepvariant) {
@@ -443,21 +449,21 @@ workflow {
             deepvariant_hap1 = DEEPVARIANT_H1(
                 ready,
                 hap1,
-                hap1_fai,
+                hap1_indexes,
                 align_wgs_hap1.bam,
                 align_wgs_hap1.bai,
                 align_wgs_hap1.bam,
-                false
+                'WGS'
             )
 
             deepvariant_hap2 = DEEPVARIANT_H2(
                 ready,
                 hap2,
-                hap2_fai,
+                hap2_indexes,
                 align_wgs_hap2.bam,
                 align_wgs_hap2.bai,
                 align_wgs_hap2.bam,
-                false
+                'WGS'
             )
         }
 
@@ -475,7 +481,7 @@ workflow {
                 align_ont_hap1.bam,
                 align_ont_hap1.bai,
                 hap1,
-                hap1_fai
+                hap1_indexes
             )
 
             pepper_hap2 = PEPPER_H2(
@@ -483,7 +489,7 @@ workflow {
                 align_ont_hap2.bam,
                 align_ont_hap2.bai,
                 hap2,
-                hap2_fai
+                hap2_indexes
             )
         }
 
@@ -508,6 +514,7 @@ workflow {
                 deepvariant_hap1.vcf,
                 original_pepper_hap1,
                 hap1,
+                hap1_indexes,
                 wgs_hap1_r1,
                 wgs_hap1_r2,
                 params.hifi ? hifi_hap1 : wgs_hap1_r1,
@@ -519,6 +526,7 @@ workflow {
                 deepvariant_hap2.vcf,
                 original_pepper_hap2,
                 hap2,
+                hap2_indexes,
                 wgs_hap2_r1,
                 wgs_hap2_r2,
                 params.hifi ? hifi_hap2 : wgs_hap2_r1,
@@ -563,6 +571,7 @@ workflow {
             np2_hap1 = NP2_H1(
                 ready,
                 hap1,
+                hap1_indexes,
                 align_hifi_hap1.bam,
                 wgs_hap1_r1,
                 wgs_hap1_r2
@@ -571,6 +580,7 @@ workflow {
             np2_hap2 = NP2_H2(
                 ready,
                 hap2,
+                hap2_indexes,
                 align_hifi_hap2.bam,
                 wgs_hap2_r1,
                 wgs_hap2_r2
@@ -588,6 +598,7 @@ workflow {
             sniffles_hifi_hap1 = SNIFFLES_HIFI_H1(
                 ready,
                 hap1,
+                hap1_indexes,
                 align_hifi_hap1.bam,
                 align_hifi_hap1.bai,
                 "hifi"
@@ -596,6 +607,7 @@ workflow {
             sniffles_hifi_hap2 = SNIFFLES_HIFI_H2(
                 ready,
                 hap2,
+                hap2_indexes,
                 align_hifi_hap2.bam,
                 align_hifi_hap2.bai,
                 "hifi"
@@ -608,6 +620,7 @@ workflow {
             sniffles_ont_hap1 = SNIFFLES_ONT_H1(
                 ready,
                 hap1,
+                hap1_indexes,
                 align_ont_hap1.bam,
                 align_ont_hap1.bai,
                 "ont"
@@ -616,6 +629,7 @@ workflow {
             sniffles_ont_hap2 = SNIFFLES_ONT_H2(
                 ready,
                 hap2,
+                hap2_indexes,
                 align_ont_hap2.bam,
                 align_ont_hap2.bai,
                 "ont"
@@ -632,6 +646,7 @@ workflow {
             cutesv_hifi_hap1 = CUTESV_HIFI_H1(
                 ready,
                 hap1,
+                hap1_indexes,
                 align_hifi_hap1.bam,
                 align_hifi_hap1.bai,
                 "hifi"
@@ -640,6 +655,7 @@ workflow {
             cutesv_hifi_hap2 = CUTESV_HIFI_H2(
                 ready,
                 hap2,
+                hap2_indexes,
                 align_hifi_hap2.bam,
                 align_hifi_hap2.bai,
                 "hifi"
@@ -652,6 +668,7 @@ workflow {
             cutesv_ont_hap1 = CUTESV_ONT_H1(
                 ready,
                 hap1,
+                hap1_indexes,
                 align_ont_hap1.bam,
                 align_ont_hap1.bai,
                 "ont"
@@ -660,6 +677,7 @@ workflow {
             cutesv_ont_hap2 = CUTESV_ONT_H2(
                 ready,
                 hap2,
+                hap2_indexes,
                 align_ont_hap2.bam,
                 align_ont_hap2.bai,
                 "ont"
@@ -679,12 +697,14 @@ workflow {
             flagger_hap1 = FLAGGER_H1(
                 ready,
                 hap1,
+                hap1_indexes,
                 align_hifi_hap1.bam
             )
 
             flagger_hap2 = FLAGGER_H2(
                 ready,
                 hap2,
+                hap2_indexes,
                 align_hifi_hap2.bam
             )
 
@@ -693,12 +713,14 @@ workflow {
             flagger_hap1 = FLAGGER_H1(
                 ready,
                 hap1,
+                hap1_indexes,
                 align_ont_hap1.bam
             )
 
             flagger_hap2 = FLAGGER_H2(
                 ready,
                 hap2,
+                hap2_indexes,
                 align_ont_hap2.bam
             )
         }
@@ -841,14 +863,12 @@ workflow {
         wgs_r1 = mix_channels([wgs_r1_single, wgs_r1_merged])
         wgs_r2 = mix_channels([wgs_r2_single, wgs_r2_merged])
 
+        draft_indexes = reference_indexes(params.draft)
+
         if (workflow_mode == 'train') {
             truth_query = Channel.value(file(params.truth_fasta, checkIfExists: true))
-            truth_vcf = TRUTH_VCF(ready, truth_script, draft, truth_query, "haploid").vcf
+            truth_vcf = TRUTH_VCF(ready, truth_script, draft, draft_indexes, truth_query, "haploid").vcf
         }
-
-        draft_fai = Channel.value(
-            file("${params.draft}.fai", checkIfExists: true)
-        )
 
         if (params.hifi) { hifi_reads = reads_channel(params.hifi).collect() }
         if (params.ont)  { ont_reads  = reads_channel(params.ont).collect()  }
@@ -893,11 +913,11 @@ workflow {
             deepvariant = DEEPVARIANT(
                 ready,
                 draft,
-                draft_fai,
+                draft_indexes,
                 align_wgs.bam,
                 align_wgs.bai,
                 align_hifi.bam,
-                true
+                'HYBRID_PACBIO_ILLUMINA'
             )
 
         } else if (run_deepvariant) {
@@ -905,11 +925,11 @@ workflow {
             deepvariant = DEEPVARIANT(
                 ready,
                 draft,
-                draft_fai,
+                draft_indexes,
                 align_wgs.bam,
                 align_wgs.bai,
                 align_wgs.bam,
-                false
+                'WGS'
             )
         }
 
@@ -925,7 +945,7 @@ workflow {
                 align_ont.bam,
                 align_ont.bai,
                 draft,
-                draft_fai
+                draft_indexes
             )
         }
 
@@ -947,6 +967,7 @@ workflow {
                 deepvariant.vcf,
                 original_pepper,
                 draft,
+                draft_indexes,
                 wgs_r1,
                 wgs_r2,
                 params.hifi ? hifi_reads : wgs_r1,
@@ -981,6 +1002,7 @@ workflow {
             np2 = NP2(
                 ready,
                 draft,
+                draft_indexes,
                 align_hifi.bam,
                 wgs_r1,
                 wgs_r2
@@ -998,6 +1020,7 @@ workflow {
             sniffles_hifi = SNIFFLES_HIFI(
                 ready,
                 draft,
+                draft_indexes,
                 align_hifi.bam,
                 align_hifi.bai,
                 "hifi"
@@ -1010,6 +1033,7 @@ workflow {
             sniffles_ont = SNIFFLES_ONT(
                 ready,
                 draft,
+                draft_indexes,
                 align_ont.bam,
                 align_ont.bai,
                 "ont"
@@ -1026,6 +1050,7 @@ workflow {
             cutesv_hifi = CUTESV_HIFI(
                 ready,
                 draft,
+                draft_indexes,
                 align_hifi.bam,
                 align_hifi.bai,
                 "hifi"
@@ -1038,6 +1063,7 @@ workflow {
             cutesv_ont = CUTESV_ONT(
                 ready,
                 draft,
+                draft_indexes,
                 align_ont.bam,
                 align_ont.bai,
                 "ont"
@@ -1054,6 +1080,7 @@ workflow {
             flagger = FLAGGER(
                 ready,
                 draft,
+                draft_indexes,
                 align_hifi.bam
             )
 
@@ -1062,6 +1089,7 @@ workflow {
             flagger = FLAGGER(
                 ready,
                 draft,
+                draft_indexes,
                 align_ont.bam
             )
         }

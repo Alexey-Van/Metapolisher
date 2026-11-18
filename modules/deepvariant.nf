@@ -7,11 +7,11 @@ process DEEPVARIANT {
     input:
         val ready
         path ref
-        path ref_fai
+        path ref_indexes, arity: '1..2'
         path illumina_bam, stageAs: 'wgs.bam'
         path illumina_bai, stageAs: 'wgs.bam.bai'
         path hifi_bam, stageAs: 'hifi.bam'
-        val has_hifi
+        val model_type
 
     output:
         path "deepvariant.vcf.gz", emit: vcf
@@ -22,7 +22,7 @@ process DEEPVARIANT {
     """
     set -euo pipefail
 
-    if [ "${has_hifi}" = "true" ]; then
+    if [ "${model_type}" = "HYBRID_PACBIO_ILLUMINA" ]; then
         echo "[DeepVariant] Hybrid mode: Illumina + HiFi"
 
         samtools merge \
@@ -34,17 +34,17 @@ process DEEPVARIANT {
         samtools index merged.bam
 
         /opt/deepvariant/bin/run_deepvariant \
-            --model_type HYBRID_PACBIO_ILLUMINA \
+            --model_type ${model_type} \
             --ref ${ref} \
             --reads merged.bam \
             --output_vcf deepvariant.vcf.gz \
             --num_shards ${task.cpus}
 
     else
-        echo "[DeepVariant] Illumina-only mode"
+        echo "[DeepVariant] WGS-only mode"
 
         /opt/deepvariant/bin/run_deepvariant \
-            --model_type WGS \
+            --model_type ${model_type} \
             --ref ${ref} \
             --reads wgs.bam \
             --output_vcf deepvariant.vcf.gz \

@@ -9,6 +9,7 @@ process FLAGGER {
     input:
         val ready
         path fasta
+        path reference_indexes, arity: '1..2'
         path bam
 
     output:

@@ -11,7 +11,7 @@ process PEPPER {
         path bam
         path bai
         path ref
-        path fai
+        path ref_indexes, arity: '1..2'
 
     output:
         path "pepper_out/*.vcf.gz", emit: vcf

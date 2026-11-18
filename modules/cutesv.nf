@@ -9,6 +9,7 @@ process CUTESV {
     input:
         val ready
         path ref
+        path ref_indexes, arity: '1..2'
         path bam
         path bai
         val label

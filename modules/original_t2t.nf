@@ -9,6 +9,7 @@ process ORIGINAL_T2T {
         path deepvariant_vcf
         path pepper_vcf
         path draft
+        path reference_indexes, arity: '1..2'
         path illumina_r1, stageAs: 'wgs_R1.fastq.gz'
         path illumina_r2, stageAs: 'wgs_R2.fastq.gz'
         path hifi, arity: '1..*', stageAs: 'hifi/*'
