@@ -39,7 +39,7 @@ process HAPLOTYPE_READS_HIFI {
             haplotype/hifi/hifi_reads.fastq.gz \
         | samtools sort -n -@ 1 -o haplotype/hifi/hifi_hap1.bam -
     ) &
-    pid1=$!
+    pid1=\$!
 
     (
         minimap2 \
@@ -50,14 +50,14 @@ process HAPLOTYPE_READS_HIFI {
             haplotype/hifi/hifi_reads.fastq.gz \
         | samtools sort -n -@ 1 -o haplotype/hifi/hifi_hap2.bam -
     ) &
-    pid2=$!
+    pid2=\$!
 
     status=0
-    wait "$pid1" || status=$?
-    wait "$pid2" || status=$?
-    if [ "$status" -ne 0 ]; then
+    wait "\$pid1" || status=\$?
+    wait "\$pid2" || status=\$?
+    if [ "\$status" -ne 0 ]; then
         echo "ERROR: HiFi alignment failed" >&2
-        exit "$status"
+        exit "\$status"
     fi
 
     python3 ${classifier} \
@@ -122,7 +122,7 @@ process HAPLOTYPE_READS_ONT {
             haplotype/ont/ont_reads.fastq.gz \
         | samtools sort -n -@ 1 -o haplotype/ont/ont_hap1.bam -
     ) &
-    pid1=$!
+    pid1=\$!
 
     (
         minimap2 \
@@ -133,14 +133,14 @@ process HAPLOTYPE_READS_ONT {
             haplotype/ont/ont_reads.fastq.gz \
         | samtools sort -n -@ 1 -o haplotype/ont/ont_hap2.bam -
     ) &
-    pid2=$!
+    pid2=\$!
 
     status=0
-    wait "$pid1" || status=$?
-    wait "$pid2" || status=$?
-    if [ "$status" -ne 0 ]; then
+    wait "\$pid1" || status=\$?
+    wait "\$pid2" || status=\$?
+    if [ "\$status" -ne 0 ]; then
         echo "ERROR: ONT alignment failed" >&2
-        exit "$status"
+        exit "\$status"
     fi
 
     python3 ${classifier} \
@@ -215,7 +215,7 @@ process HAPLOTYPE_READS_WGS {
             haplotype/wgs/wgs_reads_R2.fastq.gz \
         | samtools sort -n -@ 1 -o haplotype/wgs/wgs_hap1.bam -
     ) &
-    pid1=$!
+    pid1=\$!
 
     (
         bwa-mem3 mem \
@@ -225,14 +225,14 @@ process HAPLOTYPE_READS_WGS {
             haplotype/wgs/wgs_reads_R2.fastq.gz \
         | samtools sort -n -@ 1 -o haplotype/wgs/wgs_hap2.bam -
     ) &
-    pid2=$!
+    pid2=\$!
 
     status=0
-    wait "$pid1" || status=$?
-    wait "$pid2" || status=$?
-    if [ "$status" -ne 0 ]; then
+    wait "\$pid1" || status=\$?
+    wait "\$pid2" || status=\$?
+    if [ "\$status" -ne 0 ]; then
         echo "ERROR: WGS alignment failed" >&2
-        exit "$status"
+        exit "\$status"
     fi
 
     python3 ${classifier} \

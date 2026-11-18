@@ -25,7 +25,7 @@ process FLAGGER {
     samtools index "${bam}"
 
     # 2. Whole genome BED
-    awk '{print \$1"\\t0\\t"\$2}' "${fasta}.fai" > whole_genome.bed
+    awk '{print \$1"\t0\t"\$2}' "${fasta}.fai" > whole_genome.bed
 
     # 3. JSON (важно: экранируем \$)
     cat > annotations_path.json <<EOF
@@ -54,10 +54,10 @@ EOF
     # Use the final prediction track as the ML annotation. Older Flagger
     # builds use varying basenames, so prefer a final BED and fall back to
     # the largest BED in the output directory.
-    candidate=$(find hmm_flagger_outputs -maxdepth 1 -type f -name '*.bed' \
+    candidate=\$(find hmm_flagger_outputs -maxdepth 1 -type f -name '*.bed' \
         | grep -i 'final' | sort | head -n 1 || true)
     if [ -z "\${candidate}" ]; then
-        candidate=$(find hmm_flagger_outputs -maxdepth 1 -type f -name '*.bed' \
+        candidate=\$(find hmm_flagger_outputs -maxdepth 1 -type f -name '*.bed' \
             -printf '%s\t%p\n' | sort -nr | head -n 1 | cut -f2-)
     fi
     if [ -z "\${candidate}" ]; then

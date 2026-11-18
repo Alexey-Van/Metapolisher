@@ -15,7 +15,7 @@ process EMPTY_VCF {
     set -euo pipefail
 
     bcftools view -h ${source_vcf} \
-        | sed '/^#CHROM/ s/\tFORMAT.*$//' \
+        | sed '/^#CHROM/ s/\tFORMAT.*\$//' \
         > empty.vcf
     """
 }
